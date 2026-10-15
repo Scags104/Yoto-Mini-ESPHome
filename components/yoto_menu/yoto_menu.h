@@ -59,6 +59,20 @@ class Menu {
   std::function<float()> brightness;  // 0..1
   std::function<void(float)> set_brightness;
   std::function<std::vector<std::pair<std::string, std::string>>()> info;
+  std::function<int()> theme;              // 0 Dark, 1 Light, 2 Night, 3 Colourful
+  std::function<void(int)> set_theme;
+  std::function<int()> clock_style;        // 0 Digital, 1 Analog, 2 Minimal
+  std::function<void(int)> set_clock_style;
+  std::function<bool()> night_auto;
+  std::function<void(bool)> set_night_auto;
+
+  // Colours used when drawing (set from the active theme before draw())
+  void set_palette(Color fg, Color muted, Color highlight, Color dim) {
+    this->fg_ = fg;
+    this->muted_ = muted;
+    this->hl_ = highlight;
+    this->dim_ = dim;
+  }
   std::function<void()> restart;
   std::function<void()> power_off;
 
@@ -135,7 +149,7 @@ class Menu {
 
   // ---- Drawing (below the 32 px status bar) -------------------------------------
   void draw(Display &it, BaseFont *item_font, BaseFont *small_font) {
-    const Color WHITE(255, 255, 255), GREY(150, 150, 150), HL(30, 90, 170), DIM(70, 70, 70);
+    const Color WHITE = this->fg_, GREY = this->muted_, HL = this->hl_, DIM = this->dim_;
     auto items = this->build_();
     const int n = static_cast<int>(items.size());
     if (this->sel_ >= n)
@@ -398,6 +412,23 @@ class Menu {
                        if (this->set_brightness)
                          this->set_brightness(cycle_(br, {0.25f, 0.5f, 0.75f, 1.0f}));
                      }});
+        static const char *const THEMES[] = {"Dark", "Light", "Night", "Colourful"};
+        const int th = this->theme ? this->theme() : 0;
+        v.push_back({"Theme", THEMES[(th >= 0 && th < 4) ? th : 0], [this, th] {
+                       if (this->set_theme)
+                         this->set_theme((th + 1) % 4);
+                     }});
+        static const char *const CLOCKS[] = {"Digital", "Analog", "Minimal"};
+        const int cs = this->clock_style ? this->clock_style() : 0;
+        v.push_back({"Clock style", CLOCKS[(cs >= 0 && cs < 3) ? cs : 0], [this, cs] {
+                       if (this->set_clock_style)
+                         this->set_clock_style((cs + 1) % 3);
+                     }});
+        const bool na = this->night_auto && this->night_auto();
+        v.push_back({"Night mode", na ? "Auto" : "Off", [this, na] {
+                       if (this->set_night_auto)
+                         this->set_night_auto(!na);
+                     }});
         break;
       }
 
@@ -453,6 +484,11 @@ class Menu {
   std::vector<DirEntry> entries_;
   uint32_t last_input_{0};
   uint32_t sleep_until_{0};
+
+  Color fg_{Color(255, 255, 255)};
+  Color muted_{Color(150, 150, 150)};
+  Color hl_{Color(30, 90, 170)};
+  Color dim_{Color(70, 70, 70)};
 
   std::string confirm_title_, confirm_yes_;
   std::function<void()> confirm_action_;

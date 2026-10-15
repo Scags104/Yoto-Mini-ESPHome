@@ -58,6 +58,9 @@ and a colour screen – with no Yoto cloud account involved.
 - Volume overlay, card feedback, Bluetooth pairing screen
 - Status bar: headphones, Wi-Fi signal, Bluetooth, battery %/icon
 - Screen timeout after inactivity; brightness control
+- **Themes:** Dark, Light, Night (dim red, sleep-friendly), Colourful
+- **Clock styles:** Digital, Analog (clock face with hands), Minimal
+- **Night mode:** automatically switches to the Night theme and dims the screen between set hours
 
 ### Power & battery
 - Battery level and voltage (CW2215B fuel gauge), charging state and USB detection (SGM41513)
@@ -178,7 +181,7 @@ Open with **both knob buttons together**. Turn either knob to move, **left click
 - **Bluetooth** – on/off, pair new device, Bluetooth when away
 - **Storage** – browse folders; *Resume* / *Play from start* / *Play this folder*; play a file
 - **Sleep timer** – Off, 15, 30, 45, 60 min
-- **Settings** – screen timeout, auto power-off, brightness
+- **Settings** – screen timeout, auto power-off, brightness, theme, clock style, night mode
 - **Info** – IP address, Wi-Fi signal, battery, charging, storage free, uptime, ESPHome version
 - **Power** – restart, power off (with confirmation)
 
@@ -209,6 +212,8 @@ Open with **both knob buttons together**. Turn either knob to move, **left click
 | Charge limit | Number (60–100 %, 100 = off) |
 | Auto power-off, Screen timeout | Numbers (minutes, 0 = never) |
 | Screen | Light (backlight + brightness) |
+| Theme, Clock style | Selects |
+| Night mode, Night mode start/end, Night mode brightness | Switch / numbers |
 | Bluetooth, Bluetooth when away | Switches |
 | Bluetooth connected, Bluetooth source | Binary sensor / text |
 | Headphones | Binary sensor |
