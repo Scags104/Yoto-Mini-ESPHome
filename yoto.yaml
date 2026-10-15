@@ -1,0 +1,1399 @@
+esphome:
+  name: yoto
+  friendly_name: yoto
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: es8156_yoto_init
+      - lambda: 'id(battery).set_charge_limit(id(charge_limit).state);'
+      - lambda: |-
+          auto &m = yoto_menu::menu;
+          m.bt_enabled = []() { return id(bluetooth_enabled).state; };
+          m.set_bt = [](bool on) { if (on) id(bluetooth_enabled).turn_on(); else id(bluetooth_enabled).turn_off(); };
+          m.bt_pair = []() { id(menu_bt_pair).execute(); };
+          m.away_mode = []() { return id(bt_away_mode).state; };
+          m.set_away = [](bool on) { if (on) id(bt_away_mode).turn_on(); else id(bt_away_mode).turn_off(); };
+          m.list_dir = [](const std::string &p, std::vector<yoto_storage::DirEntry> &out) {
+            return id(storage).list_dir(p, out);
+          };
+          m.has_resume = [](const std::string &p) { return id(storage_source).has_resume(p); };
+          m.play_storage = [](const std::string &p) {
+            id(yoto_player).make_call().set_media_url("storage://" + p).perform();
+          };
+          m.stop_playback = []() {
+            id(yoto_player).make_call().set_command(media_player::MEDIA_PLAYER_COMMAND_STOP).perform();
+          };
+          m.screen_timeout = []() { return id(screen_timeout_minutes).state; };
+          m.set_screen_timeout = [](float v) { auto c = id(screen_timeout_minutes).make_call(); c.set_value(v); c.perform(); };
+          m.auto_off = []() { return id(auto_off_minutes).state; };
+          m.set_auto_off = [](float v) { auto c = id(auto_off_minutes).make_call(); c.set_value(v); c.perform(); };
+          m.brightness = []() { return id(backlight).current_values.get_brightness(); };
+          m.set_brightness = [](float b) { auto c = id(backlight).turn_on(); c.set_brightness(b); c.perform(); };
+          m.restart = []() { App.safe_reboot(); };
+          m.power_off = []() { id(power_off).execute(); };
+          m.info = []() {
+            std::vector<std::pair<std::string, std::string>> v;
+            char buf[32];
+            v.push_back({"IP address", id(ip_text).has_state() ? id(ip_text).state : std::string("-")});
+            if (wifi::global_wifi_component->is_connected()) {
+              snprintf(buf, sizeof(buf), "%d dBm", (int) wifi::global_wifi_component->wifi_rssi());
+              v.push_back({"Wi-Fi", buf});
+            } else {
+              v.push_back({"Wi-Fi", "Offline"});
+            }
+            const int lvl = id(battery).get_level();
+            if (lvl >= 0) snprintf(buf, sizeof(buf), "%d%%", lvl); else snprintf(buf, sizeof(buf), "-");
+            v.push_back({"Battery", buf});
+            v.push_back({"Charging", id(charge_state_ts).has_state() ? id(charge_state_ts).state : std::string("-")});
+            if (id(storage_free).has_state()) snprintf(buf, sizeof(buf), "%.0f MB", id(storage_free).state);
+            else snprintf(buf, sizeof(buf), "-");
+            v.push_back({"Storage free", buf});
+            const uint32_t up = millis() / 1000;
+            snprintf(buf, sizeof(buf), "%uh %02um", (unsigned) (up / 3600), (unsigned) ((up / 60) % 60));
+            v.push_back({"Uptime", buf});
+            v.push_back({"ESPHome", ESPHOME_VERSION});
+            return v;
+          };
+      - script.execute: startup_sound
+
+esp32:
+  board: esp-wrover-kit
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+    advanced:
+      include_builtin_idf_components: [esp_coex]
+
+psram:
+  mode: quad
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret yoto_key
+  actions:
+    - action: play_file
+      variables:
+        path: string
+      then:
+        - media_player.play_media:
+            id: yoto_player
+            media_url: !lambda 'return std::string("storage://") + path;'
+    - action: show_result
+      variables:
+        success: bool
+        message: string
+      then:
+        - lambda: |-
+            id(overlay_type) = success ? 2 : 3;
+            id(overlay_text) = message;
+            id(overlay_until) = millis() + 3000;
+        - component.update: screen
+
+ota:
+  - platform: esphome
+    encryption:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+safe_mode:
+
+i2c:
+  sda: GPIO21
+  scl: GPIO25
+  scan: true
+  frequency: 400kHz
+
+pca6416a:
+  - id: iox
+    address: 0x20
+
+switch:
+  - platform: template
+    id: bluetooth_enabled
+    name: "Bluetooth"
+    icon: mdi:bluetooth
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    turn_on_action:
+      - logger.log: "Bluetooth on (discoverable for 3 min)"
+      - a2dp.enable: a2dp_hub
+      - script.execute: bt_pairing_feedback
+    turn_off_action:
+      - logger.log: "Bluetooth off"
+      - a2dp.disable: a2dp_hub
+      - lambda: |-
+          id(bt_pairing_until) = 0;
+          id(bt_auto_on) = false;
+      - component.update: screen
+  - platform: template
+    id: bt_away_mode
+    name: "Bluetooth when away"
+    icon: mdi:bluetooth-transfer
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+  - platform: gpio
+    id: vinhold
+    internal: true
+    restore_mode: ALWAYS_ON
+    pin:
+      pca6416a: iox
+      number: 14
+      mode:
+        output: true
+  - platform: gpio
+    id: pwren
+    internal: true
+    restore_mode: ALWAYS_OFF
+    pin:
+      pca6416a: iox
+      number: 12
+      mode:
+        output: true
+  - platform: gpio
+    id: level_converter
+    internal: true
+    restore_mode: ALWAYS_ON
+    pin:
+      pca6416a: iox
+      number: 3
+      mode:
+        output: true
+  - platform: gpio
+    id: pactrl
+    internal: true
+    restore_mode: ALWAYS_OFF
+    pin:
+      pca6416a: iox
+      number: 6
+      mode:
+        output: true
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [yoto_cr95hf, yoto_aw88194, yoto_battery, yoto_storage, yoto_menu, yoto_encoder]
+  - source: github://cociweb/a2dp-sink@54e644c1cc8d3acbb2b89432ab87a5cae30b68ac
+    components: [a2dp, a2dp_sink, a2dp_avrcp]
+
+uart:
+  id: nfc_uart
+  tx_pin: GPIO32
+  rx_pin: GPIO33
+  baud_rate: 57600
+  stop_bits: 2
+  rx_buffer_size: 512
+
+yoto_cr95hf:
+  id: nfc
+  uart_id: nfc_uart
+  update_interval: 500ms
+  on_tag:
+    then:
+      - script.execute: { id: chime, sound: snd_card }
+      - script.execute: wake_screen
+      - lambda: |-
+          id(overlay_type) = 2;
+          id(overlay_text) = "";
+          id(overlay_until) = millis() + 2000;
+      - component.update: screen
+      - homeassistant.tag_scanned: !lambda 'return x;'
+      - text_sensor.template.publish:
+          id: last_tag
+          state: !lambda 'return x;'
+  on_tag_removed:
+    then:
+      - homeassistant.event:
+          event: esphome.yoto_tag_removed
+          data:
+            tag_id: !lambda 'return x;'
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      id: ip_text
+      name: "IP address"
+      icon: mdi:ip-network
+  - platform: template
+    id: last_tag
+    name: "Last tag"
+    icon: mdi:nfc-variant
+  - platform: a2dp_sink
+    a2dp_sink_id: a2dp_receiver
+    id: bt_source_name
+    name: "Bluetooth source"
+  - platform: a2dp
+    id: bt_title
+    type: title
+    internal: true
+  - platform: a2dp
+    id: bt_artist
+    type: artist
+    internal: true
+  - platform: sendspin
+    id: np_title
+    type: title
+    internal: true
+  - platform: sendspin
+    id: np_artist
+    type: artist
+    internal: true
+
+i2s_audio:
+  - id: i2s_out
+    i2s_lrclk_pin: GPIO18
+    i2s_bclk_pin: GPIO5
+    i2s_mclk_pin: GPIO0
+
+audio_dac:
+  - platform: es8156
+    id: hp_dac
+    address: 0x08
+
+speaker:
+  - platform: i2s_audio
+    id: audio_out
+    i2s_audio_id: i2s_out
+    i2s_dout_pin: GPIO19
+    dac_type: external
+    sample_rate: 44100
+    use_apll: true
+    bits_per_sample: 16bit
+    channel: stereo
+    timeout: never
+  - platform: mixer
+    id: audio_mixer
+    output_speaker: audio_out
+    task_stack_in_psram: true
+    source_speakers:
+      - id: media_spk
+      - id: announce_spk
+  - platform: resampler
+    id: media_resampler
+    output_speaker: media_spk
+    task_stack_in_psram: false
+    buffer_duration: 200ms
+  - platform: resampler
+    id: announce_resampler
+    output_speaker: announce_spk
+    task_stack_in_psram: true
+
+audio_file:
+  - id: snd_startup
+    file: { type: local, path: sounds/startup.wav }
+  - id: snd_power_off
+    file: { type: local, path: sounds/power_off.wav }
+  - id: snd_card
+    file: { type: local, path: sounds/card.wav }
+  - id: snd_silence
+    file: { type: local, path: sounds/silence.wav }
+  - id: snd_low_battery
+    file: { type: local, path: sounds/low_battery.wav }
+  - id: snd_bt_pairing
+    file: { type: local, path: sounds/bt_pairing.wav }
+  - id: snd_bt_connected
+    file: { type: local, path: sounds/bt_connected.wav }
+
+yoto_aw88194:
+  id: spk_amp
+  address: 0x34
+  reset_switch: pactrl
+  firmware: components/yoto_aw88194/factory_aw88194_fw.bin
+  dsp_config: components/yoto_aw88194/factory_aw88194_cfg_rev04.bin
+
+binary_sensor:
+  - platform: gpio
+    id: headphones
+    name: "Headphones"
+    icon: mdi:headphones
+    pin:
+      pca6416a: iox
+      number: 9
+      mode:
+        input: true
+      inverted: true
+    filters:
+      - delayed_on_off: 150ms
+    on_state:
+      - lambda: 'id(spk_amp).set_muted(x);'
+  - platform: a2dp_sink
+    a2dp_sink_id: a2dp_receiver
+    id: bt_connected
+    name: "Bluetooth connected"
+    on_press:
+      - media_player.play_media:
+          id: yoto_player
+          media_url: "a2dp://stream"
+      - script.execute: wake_screen
+      - lambda: |-
+          id(bt_pairing_until) = 0;
+          id(overlay_type) = 5;
+          id(overlay_until) = millis() + 3000;
+      - script.execute: { id: chime, sound: snd_bt_connected }
+      - component.update: screen
+    on_release:
+      - logger.log: "Bluetooth source disconnected"
+      - component.update: screen
+  - platform: gpio
+    id: btn_left
+    name: "Left knob button"
+    internal: true
+    pin:
+      pca6416a: iox
+      number: 5
+      mode:
+        input: true
+      inverted: true
+    filters:
+      - delayed_on_off: 20ms
+    on_press:
+      - script.execute: wake_screen
+      - if:
+          condition:
+            binary_sensor.is_on: btn_right
+          then:
+            - lambda: |-
+                id(chord_used) = true;
+                yoto_menu::menu.toggle();
+            - component.update: screen
+    on_release:
+      - if:
+          condition:
+            binary_sensor.is_off: btn_right
+          then:
+            - script.execute: chord_reset
+    on_multi_click:
+      - timing:
+          - ON for at most 800ms
+          - OFF for at least 50ms
+        then:
+          - if:
+              condition:
+                lambda: 'return id(chord_used);'
+              then: []
+              else:
+                - if:
+                    condition:
+                      lambda: 'return yoto_menu::menu.is_open();'
+                    then:
+                      - lambda: |-
+                          yoto_menu::menu.select();
+                          id(screen_dirty) = true;
+                    else:
+                      - script.execute: play_pause
+                      - homeassistant.event:
+                          event: esphome.yoto_button
+                          data: { button: left, action: press }
+      - timing:
+          - ON for at least 800ms
+        then:
+          - if:
+              condition:
+                lambda: 'return !id(chord_used) && !yoto_menu::menu.is_open();'
+              then:
+                - script.execute: full_stop
+          - homeassistant.event:
+              event: esphome.yoto_button
+              data: { button: left, action: long_press }
+  - platform: gpio
+    id: btn_right
+    name: "Right knob button"
+    internal: true
+    pin:
+      pca6416a: iox
+      number: 4
+      mode:
+        input: true
+      inverted: true
+    filters:
+      - delayed_on_off: 20ms
+    on_press:
+      - script.execute: wake_screen
+      - if:
+          condition:
+            binary_sensor.is_on: btn_left
+          then:
+            - lambda: |-
+                id(chord_used) = true;
+                yoto_menu::menu.toggle();
+            - component.update: screen
+    on_release:
+      - if:
+          condition:
+            binary_sensor.is_off: btn_left
+          then:
+            - script.execute: chord_reset
+    on_multi_click:
+      - timing:
+          - ON for at most 800ms
+          - OFF for at least 50ms
+        then:
+          - if:
+              condition:
+                lambda: 'return id(chord_used);'
+              then: []
+              else:
+                - if:
+                    condition:
+                      lambda: 'return yoto_menu::menu.is_open();'
+                    then:
+                      - lambda: |-
+                          yoto_menu::menu.back();
+                          id(screen_dirty) = true;
+                    else:
+                      - script.execute: play_pause
+                      - homeassistant.event:
+                          event: esphome.yoto_button
+                          data: { button: right, action: press }
+      - timing:
+          - ON for at least 3s
+        then:
+          - if:
+              condition:
+                lambda: 'return !id(chord_used) && !yoto_menu::menu.is_open();'
+              then:
+                - script.execute: menu_bt_pair
+          - homeassistant.event:
+              event: esphome.yoto_button
+              data: { button: right, action: long_press }
+  - platform: gpio
+    id: btn_power
+    name: "Power button"
+    internal: true
+    pin:
+      pca6416a: iox
+      number: 11
+      mode:
+        input: true
+      inverted: true
+    filters:
+      - delayed_on_off: 20ms
+    on_press:
+      - lambda: |-
+          id(last_activity) = millis();
+          id(last_touch) = millis();
+    on_multi_click:
+      - timing:
+          - ON for at most 800ms
+          - OFF for at least 50ms
+        then:
+          - if:
+              condition:
+                lambda: 'return yoto_menu::menu.is_open();'
+              then:
+                - lambda: 'yoto_menu::menu.close();'
+                - component.update: screen
+              else:
+                - light.toggle: backlight
+          - homeassistant.event:
+              event: esphome.yoto_button
+              data: { button: power, action: press }
+      - timing:
+          - ON for at least 2s
+        then:
+          - script.execute: power_off
+
+sendspin:
+  id: sendspin_hub
+  task_stack_in_psram: true
+
+media_source:
+  - platform: sendspin
+    id: sendspin_source
+    sample_rate: 44100
+  - platform: audio_file
+    id: file_source
+    task_stack_in_psram: true
+  - platform: yoto_storage
+    id: storage_source
+    storage_id: storage
+    handle_http: true
+  - platform: a2dp_sink
+    id: a2dp_media_source
+    a2dp_sink_id: a2dp_receiver
+    task_stack_in_psram: false
+    debug_logging: false
+
+media_player:
+  - platform: speaker_source
+    id: yoto_player
+    name: None
+    media_pipeline:
+      speaker: media_resampler
+      sources: [sendspin_source, a2dp_media_source, storage_source]
+    announcement_pipeline:
+      speaker: announce_resampler
+      sources: [file_source]
+    on_play:
+      - script.execute: amp_follow_playback
+    on_announcement:
+      - script.execute: amp_follow_playback
+    on_volume:
+      - lambda: |-
+          id(overlay_type) = 1;
+          id(overlay_until) = millis() + 2000;
+          id(screen_dirty) = true;
+
+script:
+  - id: es8156_yoto_init
+    then:
+      - lambda: |-
+          static const uint8_t SEQ[][2] = {
+            {0x00, 0x02}, {0x02, 0x04}, {0x01, 0x20}, {0x09, 0x00},
+            {0x0A, 0x01}, {0x0B, 0x01}, {0x20, 0x2A}, {0x21, 0x3C},
+            {0x22, 0x00}, {0x23, 0x04}, {0x24, 0x07}, {0x11, 0x30},
+            {0x0D, 0x14}, {0x18, 0x00}, {0x08, 0x3F}, {0x00, 0x03},
+            {0x25, 0x20}, {0x13, 0x00},
+            {0x14, 0xB4},
+          };
+          bool ok = true;
+          for (auto &r : SEQ) ok &= id(hp_dac).write_byte(r[0], r[1]);
+          uint8_t id1 = 0, id0 = 0;
+          id(hp_dac).read_byte(0xFD, &id1);
+          id(hp_dac).read_byte(0xFE, &id0);
+          ESP_LOGI("yoto_audio", "ES8156 init %s, chip ID 0x%02X%02X (expect 0x8155)",
+                   ok ? "OK" : "had I2C errors", id1, id0);
+  - id: amp_follow_playback
+    mode: restart
+    then:
+      - delay: 300ms
+      - lambda: |-
+          if (id(spk_amp).ensure_running()) {
+            id(spk_amp).set_muted(id(headphones).state);
+          }
+          if (id(yoto_player).state == media_player::MEDIA_PLAYER_STATE_PLAYING) {
+            const auto sst = id(storage_source).get_state();
+            if (sst == media_source::MediaSourceState::PLAYING) id(last_src) = 2;
+            else if (id(bt_connected).state) id(last_src) = 3;
+            else id(last_src) = 1;
+          }
+  - id: play_pause
+    mode: single
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: bt_connected
+          then:
+            - a2dp_avrcp.play_pause: avrcp_ctrl
+          else:
+            - if:
+                condition:
+                  lambda: |-
+                    const auto sst = id(storage_source).get_state();
+                    return sst == media_source::MediaSourceState::PLAYING ||
+                           sst == media_source::MediaSourceState::PAUSED;
+                then:
+                  - media_player.toggle: yoto_player
+                else:
+                  - if:
+                      condition:
+                        lambda: 'return id(last_src) == 2 && !id(storage_source).last_uri().empty();'
+                      then:
+                        - media_player.play_media:
+                            id: yoto_player
+                            media_url: !lambda 'return id(storage_source).last_uri();'
+                      else:
+                        - lambda: |-
+                            if (id(yoto_player).state == media_player::MEDIA_PLAYER_STATE_PLAYING) {
+                              ESP_LOGI("yoto", "Pausing Music Assistant");
+                              id(sendspin_hub)->send_client_command(::sendspin::SendspinControllerCommand::PAUSE);
+                            } else {
+                              ESP_LOGI("yoto", "Resuming Music Assistant");
+                              id(sendspin_hub)->send_client_command(::sendspin::SendspinControllerCommand::PLAY);
+                            }
+  - id: chime
+    mode: queued
+    parameters:
+      sound: string
+    then:
+      - media_player.play_media:
+          id: yoto_player
+          announcement: true
+          media_url: !lambda 'return std::string("audio-file://") + sound;'
+  - id: startup_sound
+    then:
+      - delay: 3s
+      - script.execute: { id: chime, sound: snd_silence }
+      - delay: 1500ms
+      - script.execute: { id: chime, sound: snd_startup }
+  - id: full_stop
+    mode: single
+    then:
+      - logger.log: "Left knob held: full stop"
+      - if:
+          condition:
+            binary_sensor.is_on: bt_connected
+          then:
+            - a2dp_avrcp.stop: avrcp_ctrl
+      - media_player.stop: yoto_player
+      - lambda: 'id(overlay_type) = 0;'
+      - component.update: screen
+  - id: chord_reset
+    mode: restart
+    then:
+      - delay: 400ms
+      - lambda: 'id(chord_used) = false;'
+  - id: menu_bt_pair
+    then:
+      - if:
+          condition:
+            switch.is_on: bluetooth_enabled
+          then:
+            - logger.log: "Reopening Bluetooth pairing window"
+            - a2dp.restart_discovery: a2dp_hub
+            - script.execute: bt_pairing_feedback
+          else:
+            - switch.turn_on: bluetooth_enabled
+  - id: wake_screen
+    mode: restart
+    then:
+      - lambda: |-
+          id(last_activity) = millis();
+          id(last_touch) = millis();
+      - if:
+          condition:
+            light.is_off: backlight
+          then:
+            - light.turn_on: backlight
+  - id: bt_pairing_feedback
+    mode: restart
+    then:
+      - script.execute: wake_screen
+      - lambda: |-
+          id(bt_pairing_until) = millis() + 180000;
+      - script.execute: { id: chime, sound: snd_bt_pairing }
+      - component.update: screen
+  - id: skip_next
+    mode: single
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: bt_connected
+          then:
+            - logger.log: "Right knob: next track (phone)"
+            - a2dp_avrcp.next: avrcp_ctrl
+          else:
+            - logger.log: "Right knob: next track (Music Assistant)"
+            - media_player.next: yoto_player
+            - homeassistant.event:
+                event: esphome.yoto_button
+                data: { button: right_knob, action: next }
+      - delay: 600ms
+  - id: skip_previous
+    mode: single
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: bt_connected
+          then:
+            - logger.log: "Right knob: previous track (phone)"
+            - a2dp_avrcp.previous: avrcp_ctrl
+          else:
+            - logger.log: "Right knob: previous track (Music Assistant)"
+            - media_player.previous: yoto_player
+            - homeassistant.event:
+                event: esphome.yoto_button
+                data: { button: right_knob, action: previous }
+      - delay: 600ms
+  - id: power_off
+    mode: single
+    then:
+      - logger.log: "Power button held: powering off"
+      - lambda: 'id(storage_source).save_position();'
+      - homeassistant.event:
+          event: esphome.yoto_power
+          data: { action: power_off }
+      - media_player.stop: yoto_player
+      - script.execute: { id: chime, sound: snd_power_off }
+      - delay: 1200ms
+      - switch.turn_off: vinhold
+      - delay: 3s
+      - logger.log: "Still running - USB power connected; staying on"
+      - switch.turn_on: vinhold
+
+yoto_battery:
+  id: battery
+  update_interval: 30s
+  configure_charger: true
+  battery_level:
+    name: "Battery"
+  battery_voltage:
+    name: "Battery voltage"
+  charge_state:
+    id: charge_state_ts
+    name: "Charging state"
+  charging:
+    id: charging
+    name: "Charging"
+  external_power:
+    id: usb_power
+    name: "USB power"
+
+globals:
+  - id: last_activity
+    type: uint32_t
+    initial_value: '0'
+  - id: low_battery_warned
+    type: bool
+    initial_value: 'false'
+  - id: overlay_type
+    type: int
+    initial_value: '0'
+  - id: overlay_until
+    type: uint32_t
+    initial_value: '0'
+  - id: overlay_text
+    type: std::string
+    initial_value: '""'
+  - id: bt_pairing_until
+    type: uint32_t
+    initial_value: '0'
+  - id: wifi_lost_since
+    type: uint32_t
+    initial_value: '0'
+  - id: wifi_ok_since
+    type: uint32_t
+    initial_value: '0'
+  - id: bt_auto_on
+    type: bool
+    initial_value: 'false'
+  - id: has_storage_cover
+    type: bool
+    initial_value: 'false'
+  - id: has_ma_art
+    type: bool
+    initial_value: 'false'
+  - id: screen_dirty
+    type: bool
+    initial_value: 'false'
+  - id: chord_used
+    type: bool
+    initial_value: 'false'
+  - id: last_src
+    type: int
+    initial_value: '0'
+  - id: last_touch
+    type: uint32_t
+    initial_value: '0'
+
+number:
+  - platform: template
+    id: charge_limit
+    name: "Charge limit"
+    icon: mdi:battery-heart-variant
+    unit_of_measurement: "%"
+    min_value: 60
+    max_value: 100
+    step: 5
+    initial_value: 100
+    optimistic: true
+    restore_value: true
+    mode: box
+    entity_category: config
+    on_value:
+      - lambda: 'id(battery).set_charge_limit(x);'
+  - platform: template
+    id: screen_timeout_minutes
+    name: "Screen timeout"
+    icon: mdi:monitor-off
+    unit_of_measurement: min
+    min_value: 0
+    max_value: 30
+    step: 1
+    initial_value: 2
+    optimistic: true
+    restore_value: true
+    mode: box
+    entity_category: config
+  - platform: template
+    id: auto_off_minutes
+    name: "Auto power-off"
+    icon: mdi:timer-off-outline
+    unit_of_measurement: min
+    min_value: 0
+    max_value: 120
+    step: 5
+    initial_value: 15
+    optimistic: true
+    restore_value: true
+    mode: box
+    entity_category: config
+
+interval:
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              static uint32_t seen = 0;
+              const uint32_t gen = id(storage_source).cover_generation();
+              if (gen == seen) return false;
+              seen = gen;
+              id(has_storage_cover) = false;
+              return true;
+          then:
+            - if:
+                condition:
+                  lambda: 'return !id(storage_source).cover_url().empty();'
+                then:
+                  - online_image.set_url:
+                      id: storage_cover
+                      url: !lambda 'return id(storage_source).cover_url();'
+                else:
+                  - online_image.release: storage_cover
+  - interval: 100ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(screen_dirty);'
+          then:
+            - lambda: 'id(screen_dirty) = false;'
+            - component.update: screen
+  - interval: 400ms
+    then:
+      - lambda: 'yoto_menu::menu.tick();'
+      - if:
+          condition:
+            lambda: 'return yoto_menu::menu.is_open();'
+          then:
+            - component.update: screen
+  - interval: 15s
+    then:
+      - lambda: |-
+          if (wifi::global_wifi_component->is_connected()) {
+            id(wifi_lost_since) = 0;
+            if (id(wifi_ok_since) == 0) id(wifi_ok_since) = millis() | 1;
+          } else {
+            id(wifi_ok_since) = 0;
+            if (id(wifi_lost_since) == 0) id(wifi_lost_since) = millis() | 1;
+          }
+      - if:
+          condition:
+            lambda: |-
+              const uint32_t now = millis();
+              return id(bt_away_mode).state && !id(bluetooth_enabled).state &&
+                     now > 120000 &&
+                     !wifi::global_wifi_component->is_connected() &&
+                     id(wifi_lost_since) != 0 && now - id(wifi_lost_since) > 120000;
+          then:
+            - logger.log:
+                format: "Away mode: no Wi-Fi for 2 min (uptime %u s), turning Bluetooth on"
+                args: ['(unsigned) (millis() / 1000)']
+            - switch.turn_on: bluetooth_enabled
+            - lambda: 'id(bt_auto_on) = true;'
+      - if:
+          condition:
+            lambda: |-
+              return id(bt_auto_on) && id(bluetooth_enabled).state && !id(bt_connected).state &&
+                     id(wifi_ok_since) != 0 && millis() - id(wifi_ok_since) > 60000;
+          then:
+            - logger.log: "Away mode: home Wi-Fi back and no phone connected, turning Bluetooth off"
+            - switch.turn_off: bluetooth_enabled
+      - if:
+          condition:
+            lambda: |-
+              const float mins = id(screen_timeout_minutes).state;
+              return mins > 0 && id(backlight).current_values.is_on() &&
+                     millis() - id(last_touch) > (uint32_t) (mins * 60000.0f);
+          then:
+            - light.turn_off: backlight
+  - interval: 30s
+    then:
+      - lambda: |-
+          auto st = id(yoto_player).state;
+          if (st == media_player::MEDIA_PLAYER_STATE_PLAYING ||
+              st == media_player::MEDIA_PLAYER_STATE_ANNOUNCING)
+            id(last_activity) = millis();
+      - if:
+          condition:
+            lambda: |-
+              if (id(usb_power).state) return false;
+              const float mins = id(auto_off_minutes).state;
+              if (!(mins > 0)) return false;
+              return (millis() - id(last_activity)) > (uint32_t) (mins * 60000.0f);
+          then:
+            - logger.log: "Idle on battery: auto power-off"
+            - script.execute: power_off
+      - lambda: |-
+          const int level = id(battery).get_level();
+          if (id(usb_power).state || level > 10) {
+            id(low_battery_warned) = false;
+            return;
+          }
+          if (level < 0) return;
+          if (level <= 3) {
+            ESP_LOGW("yoto_power", "Battery at %d%%: powering off", level);
+            id(power_off).execute();
+          } else if (level <= 7 && !id(low_battery_warned)) {
+            ESP_LOGW("yoto_power", "Battery low (%d%%)", level);
+            id(low_battery_warned) = true;
+            id(chime).execute("snd_low_battery");
+          }
+
+spi:
+  - id: display_spi
+    clk_pin: GPIO23
+    mosi_pin: GPIO22
+
+output:
+  - platform: ledc
+    id: backlight_pwm
+    pin: GPIO26
+
+light:
+  - platform: monochromatic
+    id: backlight
+    name: "Screen"
+    icon: mdi:monitor
+    output: backlight_pwm
+    restore_mode: ALWAYS_ON
+    default_transition_length: 250ms
+
+time:
+  - platform: pcf8563
+    id: rtc
+    address: 0x51
+  - platform: homeassistant
+    id: ha_time
+    on_time_sync:
+      - pcf8563.write_time: rtc
+
+font:
+  - file: "gfonts://Roboto@700"
+    id: font_clock
+    size: 72
+    glyphs: "0123456789:-"
+  - file: "gfonts://Roboto@700"
+    id: font_large
+    size: 48
+  - file: "gfonts://Roboto@500"
+    id: font_medium
+    size: 26
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 18
+
+display:
+  - platform: mipi_spi
+    id: screen
+    model: CUSTOM
+    spi_id: display_spi
+    data_rate: 40MHz
+    dimensions:
+      width: 240
+      height: 240
+    cs_pin: { pca6416a: iox, number: 0 }
+    dc_pin: { pca6416a: iox, number: 1 }
+    reset_pin: { pca6416a: iox, number: 2 }
+    invert_colors: true
+    color_order: bgr
+    transform:
+      mirror_x: true
+      mirror_y: false
+      swap_xy: false
+    init_sequence:
+      - [0xFE]
+      - [0xEF]
+      - [0xA4, 0x44, 0x44]
+      - [0xA5, 0x42, 0x42]
+      - [0xAA, 0x88, 0x88]
+      - [0xAE, 0x2B]
+      - [0xE8, 0x22, 0x0B]
+      - [0xE3, 0x01, 0x10]
+      - [0xFF, 0x61]
+      - [0xAC, 0x00]
+      - [0xAD, 0x33]
+      - [0xAF, 0x77]
+      - [0xA6, 0x1C, 0x1C]
+      - [0xA7, 0x1C, 0x1C]
+      - [0xA8, 0x10, 0x10]
+      - [0xA9, 0x0D, 0x0D]
+      - [0xF0, 0x02, 0x01, 0x00, 0x00, 0x00, 0x05]
+      - [0xF1, 0x01, 0x02, 0x00, 0x06, 0x10, 0x0E]
+      - [0xF2, 0x03, 0x11, 0x28, 0x02, 0x00, 0x48]
+      - [0xF3, 0x0C, 0x11, 0x30, 0x00, 0x00, 0x46]
+      - [0xF4, 0x05, 0x1F, 0x1F, 0x36, 0x30, 0x0F]
+      - [0xF5, 0x04, 0x1D, 0x1A, 0x38, 0x3F, 0x0F]
+      - [0x35, 0x00]
+      - [0x44, 0x00, 0x0A]
+    update_interval: 1s
+    lambda: |-
+      const Color BLACK(0, 0, 0), WHITE(255, 255, 255), GREY(150, 150, 150);
+      const Color GREEN(60, 200, 90), RED(225, 60, 60), AMBER(245, 170, 40), BLUE(70, 150, 240);
+      it.fill(BLACK);
+      const uint32_t now_ms = millis();
+      ESPTime t = id(ha_time).now();
+      if (!t.is_valid()) t = id(rtc).now();
+      const int h12 = t.is_valid() ? ((t.hour % 12) == 0 ? 12 : (t.hour % 12)) : 0;
+      const char *ampm = (t.is_valid() && t.hour >= 12) ? "PM" : "AM";
+      const int lvl = id(battery).get_level();
+      const bool chg = id(charging).state;
+      const int bx = 196, by = 8;
+      int status_left = bx - 6;
+      it.rectangle(bx, by, 36, 18, WHITE);
+      it.filled_rectangle(bx + 36, by + 5, 3, 8, WHITE);
+      if (lvl >= 0) {
+        const Color c = chg ? GREEN : (lvl <= 10 ? RED : WHITE);
+        it.filled_rectangle(bx + 2, by + 2, 32 * lvl / 100, 14, c);
+        char pct[12];
+        snprintf(pct, sizeof(pct), "%d%%", lvl);
+        it.print(bx - 6, by + 9, id(font_small), chg ? GREEN : WHITE, TextAlign::CENTER_RIGHT, pct);
+        int x1, y1, w, h;
+        it.get_text_bounds(bx - 6, by + 9, pct, id(font_small), TextAlign::CENTER_RIGHT, &x1, &y1, &w, &h);
+        status_left = x1;
+      }
+      auto bt_rune = [&](int cx, int cy, int h, Color c, int th) {
+        const int w = h / 2;
+        for (int d = -th / 2; d <= th / 2; d++) {
+          it.line(cx + d, cy - h, cx + d, cy + h, c);
+          it.line(cx + d, cy - h, cx + w + d, cy - h / 2, c);
+          it.line(cx + w + d, cy - h / 2, cx - w + d, cy + h / 2, c);
+          it.line(cx + d, cy + h, cx + w + d, cy + h / 2, c);
+          it.line(cx + w + d, cy + h / 2, cx - w + d, cy - h / 2, c);
+        }
+      };
+      const bool bt_on = id(bluetooth_enabled).state;
+      const bool bt_conn = id(bt_connected).state;
+      auto wifi_icon = [&](int cx, int cy, int bars, Color on, Color off) {
+        it.filled_circle(cx, cy, 2, bars > 0 ? on : off);
+        for (int i = 1; i <= 3; i++) {
+          const float r = 1.0f + 4.0f * i;
+          const Color c = i <= bars ? on : off;
+          const float a0 = -2.356f, span = 1.571f;
+          int px = cx + lroundf(r * cosf(a0)), py = cy + lroundf(r * sinf(a0));
+          for (int k = 1; k <= 8; k++) {
+            const float a = a0 + k * span / 8.0f;
+            const int x = cx + lroundf(r * cosf(a)), y = cy + lroundf(r * sinf(a));
+            it.line(px, py, x, y, c);
+            it.line(px, py + 1, x, y + 1, c);
+            px = x;
+            py = y;
+          }
+        }
+      };
+      int icon_x = status_left - 10;
+      if (bt_on) {
+        bt_rune(icon_x - 2, 17, 8, bt_conn ? BLUE : GREY, 2);
+        icon_x -= 18;
+      }
+      {
+        int bars = 0;
+        if (wifi::global_wifi_component->is_connected()) {
+          const int rssi = wifi::global_wifi_component->wifi_rssi();
+          bars = rssi > -60 ? 3 : (rssi > -72 ? 2 : 1);
+        }
+        wifi_icon(icon_x - 10, 23, bars, WHITE, Color(70, 70, 70));
+        icon_x -= 24;
+      }
+      if (id(headphones).state) {
+        const int hx = icon_x - 9, hy = 18, r = 7;
+        int px = hx - r, py = hy;
+        for (int k = 1; k <= 10; k++) {
+          const float a = 3.14159f + k * 3.14159f / 10.0f;
+          const int x = hx + lroundf(r * cosf(a)), y = hy + lroundf(r * sinf(a));
+          it.line(px, py, x, y, WHITE);
+          it.line(px, py + 1, x, y + 1, WHITE);
+          px = x;
+          py = y;
+        }
+        it.filled_rectangle(hx - r - 1, hy, 4, 8, WHITE);
+        it.filled_rectangle(hx + r - 2, hy, 4, 8, WHITE);
+      }
+      if (yoto_menu::menu.is_open()) {
+        yoto_menu::menu.draw(it, id(font_medium), id(font_small));
+        return;
+      }
+      if (id(overlay_type) != 0 && static_cast<int32_t>(now_ms - id(overlay_until)) < 0) {
+        switch (id(overlay_type)) {
+          case 1: {
+            const int v = static_cast<int>(id(yoto_player).volume * 100.0f + 0.5f);
+            it.printf(120, 105, id(font_large), WHITE, TextAlign::CENTER, "%d%%", v);
+            it.rectangle(30, 150, 180, 22, WHITE);
+            it.filled_rectangle(32, 152, 176 * v / 100, 18, BLUE);
+            return;
+          }
+          case 2:
+            for (int d = -3; d <= 3; d++) {
+              it.line(78, 112 + d, 106, 140 + d, GREEN);
+              it.line(106, 140 + d, 164, 82 + d, GREEN);
+            }
+            it.print(120, 190, id(font_medium), WHITE, TextAlign::CENTER,
+                     id(overlay_text).empty() ? "Card scanned" : id(overlay_text).substr(0, 16).c_str());
+            return;
+          case 5:
+            bt_rune(120, 95, 34, BLUE, 5);
+            it.print(120, 160, id(font_medium), WHITE, TextAlign::CENTER, "Connected");
+            if (id(bt_source_name).has_state() && !id(bt_source_name).state.empty())
+              it.print(120, 192, id(font_small), GREY, TextAlign::CENTER, id(bt_source_name).state.substr(0, 22).c_str());
+            return;
+          case 3:
+            for (int d = -3; d <= 3; d++) {
+              it.line(85 + d, 75, 155 + d, 145, RED);
+              it.line(155 + d, 75, 85 + d, 145, RED);
+            }
+            it.print(120, 190, id(font_medium), WHITE, TextAlign::CENTER,
+                     id(overlay_text).empty() ? "Unknown card" : id(overlay_text).substr(0, 16).c_str());
+            return;
+        }
+      } else {
+        id(overlay_type) = 0;
+      }
+      if (bt_on && !bt_conn && id(bt_pairing_until) != 0 &&
+          static_cast<int32_t>(now_ms - id(bt_pairing_until)) < 0) {
+        const uint32_t left_s = (id(bt_pairing_until) - now_ms) / 1000;
+        bt_rune(120, 90, 34, BLUE, 5);
+        it.print(120, 152, id(font_medium), WHITE, TextAlign::CENTER, "Bluetooth pairing");
+        it.print(120, 184, id(font_small), GREY, TextAlign::CENTER, "Connect to \"Yoto Mini\"");
+        it.printf(120, 212, id(font_small), GREY, TextAlign::CENTER, "%u:%02u", (unsigned) (left_s / 60), (unsigned) (left_s % 60));
+        return;
+      }
+      const auto st = id(yoto_player).state;
+      const bool active = st == media_player::MEDIA_PLAYER_STATE_PLAYING ||
+                          st == media_player::MEDIA_PLAYER_STATE_PAUSED;
+      const bool use_bt_meta = bt_conn && id(bt_title).has_state() && !id(bt_title).state.empty();
+      const auto sst = id(storage_source).get_state();
+      const bool use_storage_meta = !use_bt_meta && (sst == media_source::MediaSourceState::PLAYING ||
+                                                     sst == media_source::MediaSourceState::PAUSED) &&
+                                    !id(storage_source).current_title().empty();
+      std::string title, artist;
+      if (use_bt_meta) {
+        title = id(bt_title).state;
+        artist = id(bt_artist).has_state() ? id(bt_artist).state : "";
+      } else if (use_storage_meta) {
+        title = id(storage_source).current_title();
+        if (id(storage_source).track_count() > 1) {
+          char buf[24];
+          snprintf(buf, sizeof(buf), "Track %u of %u", (unsigned) id(storage_source).track_number(),
+                   (unsigned) id(storage_source).track_count());
+          artist = buf;
+        }
+      } else {
+        title = id(np_title).has_state() ? id(np_title).state : "";
+        artist = id(np_artist).has_state() ? id(np_artist).state : "";
+      }
+      if (active && !title.empty()) {
+        if (t.is_valid())
+          it.printf(8, 17, id(font_small), GREY, TextAlign::CENTER_LEFT, "%d:%02d %s", h12, t.minute, ampm);
+        std::vector<std::string> lines;
+        std::string cur, word;
+        auto flush_word = [&]() {
+          if (word.empty()) return;
+          if (word.size() > 15) word = word.substr(0, 14) + "-";
+          if (!cur.empty() && cur.size() + 1 + word.size() > 15) { lines.push_back(cur); cur.clear(); }
+          cur += (cur.empty() ? "" : " ") + word;
+          word.clear();
+        };
+        for (char c : title) { if (c == ' ') flush_word(); else word += c; }
+        flush_word();
+        if (!cur.empty()) lines.push_back(cur);
+        if (lines.size() > 3) { lines.resize(3); lines[2] += "..."; }
+        display::BaseImage *art = nullptr;
+        if (use_storage_meta && id(has_storage_cover))
+          art = id(storage_cover);
+        else if (!use_bt_meta && !use_storage_meta && id(has_ma_art))
+          art = id(ma_art);
+        if (art != nullptr) {
+          it.image(120 - art->get_width() / 2, 34 + (120 - art->get_height()) / 2, art);
+          if (lines.size() > 2) { lines.resize(2); lines[1] += "..."; }
+          int y = 172;
+          for (auto &l : lines) {
+            it.print(120, y, id(font_medium), WHITE, TextAlign::CENTER, l.c_str());
+            y += 26;
+          }
+          const bool paused = st == media_player::MEDIA_PLAYER_STATE_PAUSED;
+          const std::string sub = paused ? std::string("Paused") : artist.substr(0, 24);
+          if (!sub.empty() && lines.size() < 2)
+            it.print(120, 200, id(font_small), paused ? AMBER : GREY, TextAlign::CENTER, sub.c_str());
+          else if (!sub.empty())
+            it.print(120, 226, id(font_small), paused ? AMBER : GREY, TextAlign::CENTER, sub.c_str());
+          return;
+        }
+        const int line_h = 32;
+        int y = 105 - static_cast<int>(lines.size() - 1) * line_h / 2;
+        for (auto &l : lines) {
+          it.print(120, y, id(font_medium), WHITE, TextAlign::CENTER, l.c_str());
+          y += line_h;
+        }
+        if (!artist.empty())
+          it.print(120, 180, id(font_small), GREY, TextAlign::CENTER, artist.substr(0, 22).c_str());
+        if (st == media_player::MEDIA_PLAYER_STATE_PAUSED)
+          it.print(120, 212, id(font_small), AMBER, TextAlign::CENTER, "Paused");
+        return;
+      }
+      if (t.is_valid()) {
+        it.printf(120, 112, id(font_clock), WHITE, TextAlign::CENTER, "%d:%02d", h12, t.minute);
+        char date[24];
+        t.strftime(date, sizeof(date), "%a %d %b");
+        it.printf(120, 168, id(font_small), GREY, TextAlign::CENTER, "%s  %s", ampm, date);
+      } else {
+        it.print(120, 112, id(font_clock), GREY, TextAlign::CENTER, "--:--");
+      }
+
+a2dp:
+  id: a2dp_hub
+  device_name: "Yoto Mini"
+  auto_start: false
+  auto_reconnect: true
+  discoverable_duration: 3min
+  preferred_sample_rate: 44100
+  preferred_bits_per_sample: 16
+  ring_buffer_size: 131072
+  use_psram: true
+  diagnostics: false
+  coexistence:
+    software_coexistence: true
+    prefer_bt_while_streaming: true
+
+a2dp_sink:
+  id: a2dp_receiver
+  a2dp_id: a2dp_hub
+  sample_rate: 44100
+
+a2dp_avrcp:
+  id: avrcp_ctrl
+  a2dp_id: a2dp_hub
+
+yoto_encoder:
+  - id: knob_left
+    pin_a: GPIO39
+    pin_b: GPIO35
+    on_clockwise:
+      - script.execute: wake_screen
+      - if:
+          condition:
+            lambda: 'return yoto_menu::menu.is_open();'
+          then:
+            - lambda: |-
+                yoto_menu::menu.move(1);
+                id(screen_dirty) = true;
+          else:
+            - media_player.volume_up: yoto_player
+    on_anticlockwise:
+      - script.execute: wake_screen
+      - if:
+          condition:
+            lambda: 'return yoto_menu::menu.is_open();'
+          then:
+            - lambda: |-
+                yoto_menu::menu.move(-1);
+                id(screen_dirty) = true;
+          else:
+            - media_player.volume_down: yoto_player
+  - id: knob_right
+    pin_a: GPIO36
+    pin_b: GPIO27
+    on_clockwise:
+      - script.execute: wake_screen
+      - if:
+          condition:
+            lambda: 'return yoto_menu::menu.is_open();'
+          then:
+            - lambda: |-
+                yoto_menu::menu.move(1);
+                id(screen_dirty) = true;
+          else:
+            - script.execute: skip_next
+    on_anticlockwise:
+      - script.execute: wake_screen
+      - if:
+          condition:
+            lambda: 'return yoto_menu::menu.is_open();'
+          then:
+            - lambda: |-
+                yoto_menu::menu.move(-1);
+                id(screen_dirty) = true;
+          else:
+            - script.execute: skip_previous
+
+http_request:
+  verify_ssl: false
+  timeout: 2s
+
+image:
+  - platform: online_image
+    id: storage_cover
+    url: "http://127.0.0.1:8080/"
+    format: AUTO
+    type: RGB565
+    resize: 120x120
+    buffer_size: 16384
+    update_interval: never
+    on_download_finished:
+      - logger.log: "Storage cover art loaded"
+      - lambda: |-
+          id(has_storage_cover) = true;
+          id(screen_dirty) = true;
+    on_error:
+      - logger.log:
+          level: WARN
+          format: "Storage cover art failed to load"
+      - lambda: 'id(has_storage_cover) = false;'
+  - platform: sendspin
+    format: JPEG
+    type: RGB565
+    resize: 120x120
+    current_image:
+      id: ma_art
+    on_image_display:
+      - logger.log: "Sendspin artwork received"
+      - lambda: |-
+          id(has_ma_art) = true;
+          id(screen_dirty) = true;
+    on_image_clear:
+      - logger.log: "Sendspin artwork cleared"
+      - lambda: |-
+          id(has_ma_art) = false;
+          id(screen_dirty) = true;
+    on_image_error:
+      - logger.log:
+          level: WARN
+          format: "Sendspin artwork failed to decode"
+
+yoto_menu:
+
+yoto_storage:
+  id: storage
+  clk_pin: GPIO14
+  cmd_pin: GPIO15
+  data0_pin: GPIO2
+  data1_pin: GPIO4
+  data2_pin: GPIO12
+  data3_pin: GPIO13
+  port: 8080
+  advertise_web_ui: true
+  update_interval: 5min
+  total_space:
+    name: "Storage size"
+  free_space:
+    id: storage_free
+    name: "Storage free"
+  on_play_request:
+    - media_player.play_media:
+        id: yoto_player
+        media_url: !lambda 'return std::string("storage://") + x;'
+
+button:
+  - platform: restart
+    name: "Restart"
+
+debug:
+  update_interval: 30s
+
+sensor:
+  - platform: debug
+    free:
+      name: "Heap free"
+    psram:
+      name: "PSRAM free"
+  - platform: wifi_signal
+    name: "Wi-Fi signal"
+    update_interval: 60s
+  - platform: uptime
+    name: "Uptime"

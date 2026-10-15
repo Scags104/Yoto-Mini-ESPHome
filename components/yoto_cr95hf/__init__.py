@@ -1,0 +1,54 @@
+import esphome.codegen as cg
+import esphome.config_validation as cv
+from esphome import automation
+from esphome.components import uart
+from esphome.const import CONF_ID, CONF_TRIGGER_ID
+
+DEPENDENCIES = ["uart"]
+
+CONF_ON_TAG = "on_tag"
+CONF_ON_TAG_REMOVED = "on_tag_removed"
+
+yoto_cr95hf_ns = cg.esphome_ns.namespace("yoto_cr95hf")
+CR95HFComponent = yoto_cr95hf_ns.class_(
+    "CR95HFComponent", cg.PollingComponent, uart.UARTDevice
+)
+CR95HFTagTrigger = yoto_cr95hf_ns.class_(
+    "CR95HFTagTrigger", automation.Trigger.template(cg.std_string)
+)
+
+CONFIG_SCHEMA = (
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(CR95HFComponent),
+            cv.Optional(CONF_ON_TAG): automation.validate_automation(
+                {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(CR95HFTagTrigger)}
+            ),
+            cv.Optional(CONF_ON_TAG_REMOVED): automation.validate_automation(
+                {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(CR95HFTagTrigger)}
+            ),
+        }
+    )
+    .extend(cv.polling_component_schema("500ms"))
+    .extend(uart.UART_DEVICE_SCHEMA)
+)
+
+FINAL_VALIDATE_SCHEMA = uart.final_validate_device_schema(
+    "yoto_cr95hf", baud_rate=57600, require_tx=True, require_rx=True, stop_bits=2
+)
+
+
+async def to_code(config):
+    var = cg.new_Pvariable(config[CONF_ID])
+    await cg.register_component(var, config)
+    await uart.register_uart_device(var, config)
+
+    for conf in config.get(CONF_ON_TAG, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID])
+        cg.add(var.add_on_tag_trigger(trigger))
+        await automation.build_automation(trigger, [(cg.std_string, "x")], conf)
+
+    for conf in config.get(CONF_ON_TAG_REMOVED, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID])
+        cg.add(var.add_on_tag_removed_trigger(trigger))
+        await automation.build_automation(trigger, [(cg.std_string, "x")], conf)
