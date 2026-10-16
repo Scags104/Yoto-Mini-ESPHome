@@ -18,6 +18,8 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
+#include <esp_ota_ops.h>  // esp_ota_mark_app_valid_cancel_rollback() for the power-off script
+
 namespace yoto_menu {
 
 using esphome::Color;

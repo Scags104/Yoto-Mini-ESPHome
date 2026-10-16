@@ -4,6 +4,7 @@ esphome:
   on_boot:
     priority: -100
     then:
+      - pcf8563.read_time: rtc
       - script.execute: es8156_yoto_init
       - lambda: 'id(battery).set_charge_limit(id(charge_limit).state);'
       - lambda: |-
@@ -83,7 +84,6 @@ psram:
 
 logger:
   level: INFO
-  baud_rate: 0
 
 api:
   encryption:
@@ -500,6 +500,8 @@ binary_sensor:
       - lambda: |-
           id(last_activity) = millis();
           id(last_touch) = millis();
+    on_release:
+      - lambda: 'id(power_btn_armed) = true;'
     on_multi_click:
       - timing:
           - ON for at most 800ms
@@ -519,7 +521,12 @@ binary_sensor:
       - timing:
           - ON for at least 2s
         then:
-          - script.execute: power_off
+          # Ignore the hold that switched the Yoto on (button not yet released since boot)
+          - if:
+              condition:
+                lambda: 'return id(power_btn_armed);'
+              then:
+                - script.execute: power_off
 
 sendspin:
   id: sendspin_hub
@@ -533,6 +540,9 @@ media_source:
     decode_memory: internal
   - platform: audio_file
     id: file_source
+    task_stack_in_psram: true
+  - platform: audio_http
+    id: http_announce_source
     task_stack_in_psram: true
   - platform: yoto_storage
     id: storage_source
@@ -553,13 +563,15 @@ media_player:
       sources: [sendspin_source, a2dp_media_source, storage_source]
     announcement_pipeline:
       speaker: announce_resampler
-      sources: [file_source]
+      sources: [file_source, http_announce_source]
     on_play:
       - script.execute: amp_follow_playback
     on_announcement:
       - script.execute: amp_follow_playback
+      - script.execute: duck_for_announcement
     on_volume:
       - lambda: |-
+          if (!id(splash_done)) return;
           id(overlay_type) = 1;
           id(overlay_until) = millis() + 2000;
           id(screen_dirty) = true;
@@ -583,6 +595,23 @@ script:
           id(hp_dac).read_byte(0xFE, &id0);
           ESP_LOGI("yoto_audio", "ES8156 init %s, chip ID 0x%02X%02X (expect 0x8155)",
                    ok ? "OK" : "had I2C errors", id1, id0);
+  - id: duck_for_announcement
+    mode: restart
+    then:
+      - mixer_speaker.apply_ducking:
+          id: media_spk
+          decibel_reduction: 20
+          duration: 300ms
+      - delay: 500ms
+      - wait_until:
+          condition:
+            lambda: 'return id(yoto_player).state != media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
+          timeout: 120s
+      - mixer_speaker.apply_ducking:
+          id: media_spk
+          decibel_reduction: 0
+          duration: 500ms
+
   - id: amp_follow_playback
     mode: restart
     then:
@@ -738,6 +767,7 @@ script:
     then:
       - logger.log: "Power button held: powering off"
       - lambda: 'id(storage_source).save_position();'
+      - lambda: 'esp_ota_mark_app_valid_cancel_rollback();'
       - homeassistant.event:
           event: esphome.yoto_power
           data: { action: power_off }
@@ -793,6 +823,12 @@ globals:
     type: uint32_t
     initial_value: '0'
   - id: bt_auto_on
+    type: bool
+    initial_value: 'false'
+  - id: splash_done
+    type: bool
+    initial_value: 'false'
+  - id: power_btn_armed            # power button released at least once since boot
     type: bool
     initial_value: 'false'
   - id: night_active
@@ -1182,6 +1218,25 @@ display:
           break;
       }
       it.fill(BLACK);
+      if (!id(splash_done)) {
+        static uint32_t splash_start = 0;
+        if (splash_start == 0) splash_start = millis() | 1;
+        const uint32_t shown = millis() - splash_start;
+        ESPTime st = id(ha_time).now();
+        if (!st.is_valid()) st = id(rtc).now();
+        const bool ready = api::global_api_server->is_connected() && st.is_valid();
+        if ((ready && shown > 3000) || shown > 15000) {
+          id(splash_done) = true;
+        } else {
+          it.filled_circle(120, 100, 52, BLUE);
+          it.filled_triangle(104, 74, 104, 126, 146, 100, BLACK);
+          it.print(120, 178, id(font_medium), WHITE, TextAlign::CENTER, App.get_friendly_name().c_str());
+          const int dots = (millis() / 500) % 4;
+          for (int d = 0; d < 3; d++)
+            it.filled_circle(106 + d * 14, 212, 4, d < dots ? WHITE : DIM);
+          return;
+        }
+      }
       const uint32_t now_ms = millis();
       ESPTime t = id(ha_time).now();
       if (!t.is_valid()) t = id(rtc).now();

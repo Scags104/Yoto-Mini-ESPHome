@@ -53,6 +53,7 @@ and a colour screen – with no Yoto cloud account involved.
 - Knob push buttons, power button, two-button **menu gesture**
 
 ### Screen (240×240 colour)
+- Boot splash while starting up (until Home Assistant and the clock are ready)
 - Clock (12-hour, kept by the onboard RTC even without Wi-Fi)
 - Now playing: title, artist/track number, cover art, paused state
 - Volume overlay, card feedback, Bluetooth pairing screen
@@ -115,6 +116,7 @@ For music, use `-ac 2 -b:a 128k`.
 | Music Assistant (Sendspin) | FLAC preferred (PCM fallback), 44.1 kHz / 16-bit / stereo, decoded in internal RAM |
 | Bluetooth from a phone | A2DP, received at 44.1 kHz / 16-bit |
 | Home Assistant `play_media` URLs | MP3, FLAC, WAV over http(s) |
+| Home Assistant TTS / announcements | Played over the current audio, which is ducked by 20 dB |
 
 ### Cover art
 
