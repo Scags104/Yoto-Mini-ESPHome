@@ -112,7 +112,7 @@ For music, use `-ac 2 -b:a 128k`.
 
 | Source | Format |
 | --- | --- |
-| Music Assistant (Sendspin) | FLAC, 44.1 kHz / 16-bit / stereo (negotiated by Sendspin) |
+| Music Assistant (Sendspin) | FLAC preferred (PCM fallback), 44.1 kHz / 16-bit / stereo, decoded in internal RAM |
 | Bluetooth from a phone | A2DP, received at 44.1 kHz / 16-bit |
 | Home Assistant `play_media` URLs | MP3, FLAC, WAV over http(s) |
 

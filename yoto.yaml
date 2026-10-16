@@ -82,7 +82,8 @@ psram:
   speed: 80MHz
 
 logger:
-  level: DEBUG
+  level: INFO
+  baud_rate: 0
 
 api:
   encryption:
@@ -528,6 +529,8 @@ media_source:
   - platform: sendspin
     id: sendspin_source
     sample_rate: 44100
+    codecs: [flac, pcm]
+    decode_memory: internal
   - platform: audio_file
     id: file_source
     task_stack_in_psram: true
