@@ -117,6 +117,37 @@ bool YotoStorage::list_dir(const std::string &rel, std::vector<DirEntry> &out, s
   return true;
 }
 
+static std::string trim(const std::string &s) {
+  const size_t a = s.find_first_not_of(" \t\r\n");
+  if (a == std::string::npos)
+    return "";
+  const size_t b = s.find_last_not_of(" \t\r\n");
+  return s.substr(a, b - a + 1);
+}
+
+bool YotoStorage::load_stations(std::vector<std::pair<std::string, std::string>> &out, size_t max_entries) const {
+  out.clear();
+  const std::string path = std::string(MOUNT_POINT) + "/stations.txt";
+  FILE *f = fopen(path.c_str(), "r");
+  if (f == nullptr)
+    return false;
+  char line[512];
+  while (out.size() < max_entries && fgets(line, sizeof(line), f) != nullptr) {
+    const std::string l = trim(line);
+    if (l.empty() || l[0] == '#')
+      continue;
+    const size_t bar = l.find('|');
+    if (bar == std::string::npos)
+      continue;
+    const std::string name = trim(l.substr(0, bar));
+    const std::string url = trim(l.substr(bar + 1));
+    if (!name.empty() && (url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0))
+      out.emplace_back(name, url);
+  }
+  fclose(f);
+  return true;
+}
+
 std::string YotoStorage::url_encode_path(const std::string &s) {
   static const char *HEX = "0123456789ABCDEF";
   std::string out;

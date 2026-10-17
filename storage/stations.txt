@@ -1,0 +1,12 @@
+# Yoto internet radio stations - one per line:  Name | stream URL
+# MP3 streams work best. .m3u and .pls playlist links also work.
+# Not supported: AAC-only streams and HLS (.m3u8) streams.
+# Lines starting with # are ignored. Edit this file in the file manager.
+
+Groove Salad (SomaFM) | http://ice1.somafm.com/groovesalad-128-mp3
+Drone Zone (SomaFM) | http://ice1.somafm.com/dronezone-128-mp3
+Secret Agent (SomaFM) | http://ice1.somafm.com/secretagent-128-mp3
+Lush (SomaFM) | http://ice1.somafm.com/lush-128-mp3
+Folk Forward (SomaFM) | http://ice1.somafm.com/folkfwd-128-mp3
+Radio Paradise | http://stream.radioparadise.com/mp3-128
+Radio Paradise (UK server) | http://stream-uk1.radioparadise.com/mp3-128

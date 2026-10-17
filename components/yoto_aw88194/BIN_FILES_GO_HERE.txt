@@ -1,0 +1,7 @@
+Put the two stock Yoto amp DSP files in this folder (not included - Yoto data):
+
+  factory_aw88194_fw.bin          2036 bytes
+  factory_aw88194_cfg_rev04.bin    924 bytes
+
+Source: Open Yoto, firmware/components/aw88194/
+  https://github.com/tensorfish/open-yoto

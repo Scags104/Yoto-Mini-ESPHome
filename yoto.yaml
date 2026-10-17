@@ -18,6 +18,12 @@ esphome:
             return id(storage).list_dir(p, out);
           };
           m.has_resume = [](const std::string &p) { return id(storage_source).has_resume(p); };
+          m.list_stations = [](std::vector<std::pair<std::string, std::string>> &out) {
+            return id(storage).load_stations(out);
+          };
+          m.play_radio = [](const std::string &name, const std::string &url) {
+            id(yoto_player).make_call().set_media_url("radio://" + name + "|" + url).perform();
+          };
           m.play_storage = [](const std::string &p) {
             id(yoto_player).make_call().set_media_url("storage://" + p).perform();
           };
@@ -83,7 +89,7 @@ psram:
   speed: 80MHz
 
 logger:
-  level: INFO
+  level: DEBUG
 
 api:
   encryption:
@@ -1378,7 +1384,9 @@ display:
         artist = id(bt_artist).has_state() ? id(bt_artist).state : "";
       } else if (use_storage_meta) {
         title = id(storage_source).current_title();
-        if (id(storage_source).track_count() > 1) {
+        if (id(storage_source).is_radio()) {
+          artist = "Internet radio";
+        } else if (id(storage_source).track_count() > 1) {
           char buf[24];
           snprintf(buf, sizeof(buf), "Track %u of %u", (unsigned) id(storage_source).track_number(),
                    (unsigned) id(storage_source).track_count());

@@ -40,7 +40,7 @@ struct Item {
   std::function<void()> action;  // run on select (empty = not selectable)
 };
 
-enum class Page : uint8_t { ROOT, BLUETOOTH, STORAGE, SLEEP, SETTINGS, INFO, POWER, CONFIRM };
+enum class Page : uint8_t { ROOT, BLUETOOTH, STORAGE, RADIO, SLEEP, SETTINGS, INFO, POWER, CONFIRM };
 
 class Menu {
  public:
@@ -53,6 +53,9 @@ class Menu {
   std::function<bool(const std::string &, std::vector<DirEntry> &)> list_dir;
   std::function<void(const std::string &)> play_storage;
   std::function<bool(const std::string &)> has_resume;  // folder has a saved position
+  // Internet radio: stations from /stations.txt, and play one (name, url)
+  std::function<bool(std::vector<std::pair<std::string, std::string>> &)> list_stations;
+  std::function<void(const std::string &, const std::string &)> play_radio;
   std::function<void()> stop_playback;
   std::function<float()> screen_timeout;
   std::function<void(float)> set_screen_timeout;
@@ -221,6 +224,11 @@ class Menu {
     this->top_ = 0;
     if (p == Page::STORAGE)
       this->load_dir_();
+    if (p == Page::RADIO) {
+      this->stations_.clear();
+      if (this->list_stations)
+        this->list_stations(this->stations_);
+    }
   }
 
   void load_dir_() {
@@ -270,6 +278,8 @@ class Menu {
           return "Storage";
         return this->path_.substr(this->path_.rfind('/') + 1);
       }
+      case Page::RADIO:
+        return "Radio";
       case Page::SLEEP:
         return "Sleep timer";
       case Page::SETTINGS:
@@ -313,6 +323,7 @@ class Menu {
       case Page::ROOT: {
         v.push_back({"Bluetooth", ">", [this] { this->enter_(Page::BLUETOOTH); }});
         v.push_back({"Storage", ">", [this] { this->enter_(Page::STORAGE, "/"); }});
+        v.push_back({"Radio", ">", [this] { this->enter_(Page::RADIO); }});
         std::string sleep = "Off";
         if (const uint32_t s = this->sleep_remaining_s()) {
           char buf[16];
@@ -378,6 +389,23 @@ class Menu {
           } else {
             v.push_back({e.name, "", nullptr});  // shown, not playable
           }
+        }
+        break;
+      }
+
+      case Page::RADIO: {
+        if (this->stations_.empty()) {
+          v.push_back({"No stations.txt", "", nullptr});
+          v.push_back({"Add one in the file manager", "", nullptr});
+          break;
+        }
+        for (const auto &st : this->stations_) {
+          const std::string name = st.first, url = st.second;
+          v.push_back({name, "", [this, name, url] {
+                         if (this->play_radio)
+                           this->play_radio(name, url);
+                         this->close();
+                       }});
         }
         break;
       }
@@ -484,6 +512,7 @@ class Menu {
   int top_{0};
   std::vector<Frame> stack_;
   std::vector<DirEntry> entries_;
+  std::vector<std::pair<std::string, std::string>> stations_;
   uint32_t last_input_{0};
   uint32_t sleep_until_{0};
 

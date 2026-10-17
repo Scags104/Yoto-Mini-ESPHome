@@ -38,6 +38,7 @@ and a colour screen – with no Yoto cloud account involved.
 - **Music Assistant** playback over **Sendspin**, including per-source pause/resume
 - **Bluetooth A2DP** – stream from a phone to the Yoto, with track info and phone controls (AVRCP)
 - **Local playback** from the built-in eMMC storage (folders play as playlists)
+- **Internet radio** straight from the menu – stations listed in `stations.txt` on the storage
 - **Chimes** for startup, card scans, power-off, low battery, Bluetooth pairing and connection
 - Volume applied in software, so the knob controls speaker and headphones alike
 - Built-in mixer and resampler: chimes play over music; non-44.1 kHz audio is converted
@@ -116,6 +117,7 @@ For music, use `-ac 2 -b:a 128k`.
 | Music Assistant (Sendspin) | FLAC preferred (PCM fallback), 44.1 kHz / 16-bit / stereo, decoded in internal RAM |
 | Bluetooth from a phone | A2DP, received at 44.1 kHz / 16-bit |
 | Home Assistant `play_media` URLs | MP3, FLAC, WAV over http(s) |
+| Internet radio (`stations.txt`) | MP3 streams (http preferred); `.m3u` / `.pls` links resolved; no AAC or HLS (`.m3u8`) |
 | Home Assistant TTS / announcements | Played over the current audio, which is ducked by 20 dB |
 
 ### Cover art
@@ -182,6 +184,7 @@ Open with **both knob buttons together**. Turn either knob to move, **left click
 
 - **Bluetooth** – on/off, pair new device, Bluetooth when away
 - **Storage** – browse folders; *Resume* / *Play from start* / *Play this folder*; play a file
+- **Radio** – internet radio stations from `stations.txt`
 - **Sleep timer** – Off, 15, 30, 45, 60 min
 - **Settings** – screen timeout, auto power-off, brightness, theme, clock style, night mode
 - **Info** – IP address, Wi-Fi signal, battery, charging, storage free, uptime, ESPHome version
@@ -256,6 +259,8 @@ Open with **both knob buttons together**. Turn either knob to move, **left click
 - **Limits:** listings show the first 300 items; folder playlists take up to 500 tracks.
   Huge folders (e.g. the stock Yoto icon cache) can be removed with *Delete* / *Delete all here*.
 - Hidden files (starting with `.`) are not listed.
+- **Radio stations:** upload `stations.txt` to the top level of the storage – one station per
+  line as `Name | stream URL` (a starter file is in `storage/stations.txt` in this bundle).
 
 ---
 
