@@ -260,7 +260,8 @@ Open with **both knob buttons together**. Turn either knob to move, **left click
   Huge folders (e.g. the stock Yoto icon cache) can be removed with *Delete* / *Delete all here*.
 - Hidden files (starting with `.`) are not listed.
 - **Radio stations:** upload `stations.txt` to the top level of the storage – one station per
-  line as `Name | stream URL` (a starter file is in `storage/stations.txt` in this bundle).
+  line as `Genre | Name | stream URL` (genres become submenus) or `Name | stream URL`
+  (a starter file is in `storage/stations.txt` in this bundle).
 
 ---
 

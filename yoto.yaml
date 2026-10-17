@@ -18,7 +18,7 @@ esphome:
             return id(storage).list_dir(p, out);
           };
           m.has_resume = [](const std::string &p) { return id(storage_source).has_resume(p); };
-          m.list_stations = [](std::vector<std::pair<std::string, std::string>> &out) {
+          m.list_stations = [](std::vector<yoto_storage::Station> &out) {
             return id(storage).load_stations(out);
           };
           m.play_radio = [](const std::string &name, const std::string &url) {

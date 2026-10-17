@@ -28,6 +28,7 @@ using esphome::display::BaseFont;
 using esphome::display::Display;
 using esphome::display::TextAlign;
 using esphome::yoto_storage::DirEntry;
+using esphome::yoto_storage::Station;
 
 static constexpr uint32_t IDLE_CLOSE_MS = 30000;
 static constexpr int ROWS = 6;
@@ -40,7 +41,7 @@ struct Item {
   std::function<void()> action;  // run on select (empty = not selectable)
 };
 
-enum class Page : uint8_t { ROOT, BLUETOOTH, STORAGE, RADIO, SLEEP, SETTINGS, INFO, POWER, CONFIRM };
+enum class Page : uint8_t { ROOT, BLUETOOTH, STORAGE, RADIO, RADIO_GENRE, SLEEP, SETTINGS, INFO, POWER, CONFIRM };
 
 class Menu {
  public:
@@ -54,7 +55,7 @@ class Menu {
   std::function<void(const std::string &)> play_storage;
   std::function<bool(const std::string &)> has_resume;  // folder has a saved position
   // Internet radio: stations from /stations.txt, and play one (name, url)
-  std::function<bool(std::vector<std::pair<std::string, std::string>> &)> list_stations;
+  std::function<bool(std::vector<Station> &)> list_stations;
   std::function<void(const std::string &, const std::string &)> play_radio;
   std::function<void()> stop_playback;
   std::function<float()> screen_timeout;
@@ -244,6 +245,15 @@ class Menu {
     this->enter_(Page::CONFIRM);
   }
 
+  Item station_item_(const Station &st) {
+    const std::string name = st.name, url = st.url;
+    return {name, "", [this, name, url] {
+              if (this->play_radio)
+                this->play_radio(name, url);
+              this->close();
+            }};
+  }
+
   static std::string join_(const std::string &dir, const std::string &name) {
     return (dir.empty() || dir == "/" ? "" : dir) + "/" + name;
   }
@@ -280,6 +290,8 @@ class Menu {
       }
       case Page::RADIO:
         return "Radio";
+      case Page::RADIO_GENRE:
+        return this->path_;
       case Page::SLEEP:
         return "Sleep timer";
       case Page::SETTINGS:
@@ -399,13 +411,25 @@ class Menu {
           v.push_back({"Add one in the file manager", "", nullptr});
           break;
         }
+        // Genres (in file order) as submenus; stations without a genre listed after them
+        std::vector<std::string> genres;
         for (const auto &st : this->stations_) {
-          const std::string name = st.first, url = st.second;
-          v.push_back({name, "", [this, name, url] {
-                         if (this->play_radio)
-                           this->play_radio(name, url);
-                         this->close();
-                       }});
+          if (!st.genre.empty() && std::find(genres.begin(), genres.end(), st.genre) == genres.end())
+            genres.push_back(st.genre);
+        }
+        for (const auto &g : genres)
+          v.push_back({g, ">", [this, g] { this->enter_(Page::RADIO_GENRE, g); }});
+        for (const auto &st : this->stations_) {
+          if (st.genre.empty())
+            v.push_back(this->station_item_(st));
+        }
+        break;
+      }
+
+      case Page::RADIO_GENRE: {
+        for (const auto &st : this->stations_) {
+          if (st.genre == this->path_)
+            v.push_back(this->station_item_(st));
         }
         break;
       }
@@ -512,7 +536,7 @@ class Menu {
   int top_{0};
   std::vector<Frame> stack_;
   std::vector<DirEntry> entries_;
-  std::vector<std::pair<std::string, std::string>> stations_;
+  std::vector<Station> stations_;
   uint32_t last_input_{0};
   uint32_t sleep_until_{0};
 

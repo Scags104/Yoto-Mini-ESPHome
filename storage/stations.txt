@@ -1,12 +1,23 @@
-# Yoto internet radio stations - one per line:  Name | stream URL
+# Yoto internet radio stations - one per line:
+#   Genre | Name | stream URL      (shown under a "Genre" submenu)
+#   Name | stream URL              (no genre - listed directly under Radio)
 # MP3 streams work best. .m3u and .pls playlist links also work.
 # Not supported: AAC-only streams and HLS (.m3u8) streams.
-# Lines starting with # are ignored. Edit this file in the file manager.
+# Genres appear in the order they first occur. Lines starting with # are ignored.
+ 
+Chill | Groove Salad (SomaFM) | http://ice1.somafm.com/groovesalad-128-mp3
+Chill | Drone Zone (SomaFM) | http://ice1.somafm.com/dronezone-128-mp3
+Chill | Lush (SomaFM) | http://ice1.somafm.com/lush-128-mp3
+Eclectic | Radio Paradise | http://stream.radioparadise.com/mp3-128
+Eclectic | Radio Paradise (UK server) | http://stream-uk1.radioparadise.com/mp3-128
+Eclectic | Secret Agent (SomaFM) | http://ice1.somafm.com/secretagent-128-mp3
+Folk | Folk Forward (SomaFM) | http://ice1.somafm.com/folkfwd-128-mp3
+Kids | Radio Teddy - Livestream | http://streamtdy.ir-media-tec.com/live/mp3-128/web/play.mp3
+Kids | Fun Kids Junior | http://listen-funkids.sharp-stream.com/funkidsjunior.mp3
+Kids | Radio Teddy - Kinder Disco | http://streamtdy.ir-media-tec.com/disco/mp3-128/web/play.mp3
+Kids | Radio Teddy - TEDDY Cool | http://streamtdy.ir-media-tec.com/cool/mp3-128/web/play.mp3
+Kids | Kids Public Radio Jabberwocky | http://kidspublicradio.got.net:8000/jabberwocky
+Kids | Radio Teddy - Kinderlieder | http://streamtdy.ir-media-tec.com/kinderlieder/mp3-128/web/play.mp3
+Kids | 1.FM - Kids FM Radio | http://strm112.1.fm/kidsfm_mobile_mp3
+Kids | Rai Radio Kids | http://icestreaming.rai.it/11.mp3
 
-Groove Salad (SomaFM) | http://ice1.somafm.com/groovesalad-128-mp3
-Drone Zone (SomaFM) | http://ice1.somafm.com/dronezone-128-mp3
-Secret Agent (SomaFM) | http://ice1.somafm.com/secretagent-128-mp3
-Lush (SomaFM) | http://ice1.somafm.com/lush-128-mp3
-Folk Forward (SomaFM) | http://ice1.somafm.com/folkfwd-128-mp3
-Radio Paradise | http://stream.radioparadise.com/mp3-128
-Radio Paradise (UK server) | http://stream-uk1.radioparadise.com/mp3-128

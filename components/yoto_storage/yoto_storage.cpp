@@ -125,7 +125,7 @@ static std::string trim(const std::string &s) {
   return s.substr(a, b - a + 1);
 }
 
-bool YotoStorage::load_stations(std::vector<std::pair<std::string, std::string>> &out, size_t max_entries) const {
+bool YotoStorage::load_stations(std::vector<Station> &out, size_t max_entries) const {
   out.clear();
   const std::string path = std::string(MOUNT_POINT) + "/stations.txt";
   FILE *f = fopen(path.c_str(), "r");
@@ -136,13 +136,22 @@ bool YotoStorage::load_stations(std::vector<std::pair<std::string, std::string>>
     const std::string l = trim(line);
     if (l.empty() || l[0] == '#')
       continue;
-    const size_t bar = l.find('|');
-    if (bar == std::string::npos)
+    // The URL is everything after the last '|'; before it: "Genre | Name" or "Name"
+    const size_t last = l.rfind('|');
+    if (last == std::string::npos)
       continue;
-    const std::string name = trim(l.substr(0, bar));
-    const std::string url = trim(l.substr(bar + 1));
-    if (!name.empty() && (url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0))
-      out.emplace_back(name, url);
+    Station st;
+    st.url = trim(l.substr(last + 1));
+    const std::string head = trim(l.substr(0, last));
+    const size_t first = head.find('|');
+    if (first == std::string::npos) {
+      st.name = head;
+    } else {
+      st.genre = trim(head.substr(0, first));
+      st.name = trim(head.substr(first + 1));
+    }
+    if (!st.name.empty() && (st.url.rfind("http://", 0) == 0 || st.url.rfind("https://", 0) == 0))
+      out.push_back(std::move(st));
   }
   fclose(f);
   return true;

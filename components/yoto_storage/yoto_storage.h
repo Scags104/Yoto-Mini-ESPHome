@@ -18,6 +18,13 @@ namespace yoto_storage {
 
 static constexpr const char *MOUNT_POINT = "/sdcard";
 
+// One internet radio station from /stations.txt
+struct Station {
+  std::string genre;  // "" when the line has no genre
+  std::string name;
+  std::string url;
+};
+
 struct DirEntry {
   std::string name;
   bool is_dir;
@@ -68,8 +75,10 @@ class YotoStorage : public PollingComponent {
   // Reads the first Ogg page: 1 = Opus, 0 = Vorbis/other, -1 = not Ogg / unreadable
   int ogg_is_opus(const std::string &rel) const;
 
-  // Internet radio: reads /stations.txt ("Name | URL" per line, # = comment)
-  bool load_stations(std::vector<std::pair<std::string, std::string>> &out, size_t max_entries = 100) const;
+  // Internet radio: reads /stations.txt, one station per line, # = comment:
+  //   Genre | Name | URL     (grouped into a genre submenu)
+  //   Name | URL             (no genre)
+  bool load_stations(std::vector<Station> &out, size_t max_entries = 150) const;
 
   // Called (deferred to the main loop) when the web page asks to play a path
   void request_play(const std::string &rel);
