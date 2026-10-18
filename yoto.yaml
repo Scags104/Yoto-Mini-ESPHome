@@ -305,7 +305,7 @@ speaker:
   - platform: resampler
     id: media_resampler
     output_speaker: media_spk
-    task_stack_in_psram: false
+    task_stack_in_psram: true
     buffer_duration: 200ms
   - platform: resampler
     id: announce_resampler
@@ -554,6 +554,7 @@ media_source:
     id: storage_source
     storage_id: storage
     handle_http: true
+    task_stack_in_psram: true
   - platform: a2dp_sink
     id: a2dp_media_source
     a2dp_sink_id: a2dp_receiver
@@ -1009,6 +1010,11 @@ interval:
               if (gen == seen) return false;
               seen = gen;
               id(has_storage_cover) = false;
+              if (!id(storage_source).cover_url().empty() &&
+                  heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < 40000) {
+                ESP_LOGW("yoto", "Not enough free memory to decode cover art right now; skipping");
+                return false;
+              }
               return true;
           then:
             - if:
@@ -1618,6 +1624,7 @@ yoto_storage:
   username: !secret yoto_admin_user
   password: !secret yoto_admin_password
   advertise_web_ui: true
+  large_allocs_in_psram: true
   update_interval: 5min
   total_space:
     name: "Storage size"
@@ -1640,6 +1647,8 @@ sensor:
   - platform: debug
     free:
       name: "Heap free"
+    block:
+      name: "Heap max block"
     psram:
       name: "PSRAM free"
   - platform: wifi_signal

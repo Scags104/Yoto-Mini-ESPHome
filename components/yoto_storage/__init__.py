@@ -8,7 +8,7 @@ from esphome.components.esp32 import (
     include_builtin_idf_component,
     require_vfs_dir,
 )
-from esphome.core import CORE
+from esphome.core import CORE, CoroPriority, coroutine_with_priority
 from esphome.const import (
     CONF_ID,
     CONF_PORT,
@@ -35,6 +35,7 @@ CONF_FREQUENCY_KHZ = "frequency_khz"
 CONF_ADVERTISE_WEB_UI = "advertise_web_ui"
 CONF_STREAM_PORT = "stream_port"
 CONF_USERNAME = "username"
+CONF_LARGE_ALLOCS_IN_PSRAM = "large_allocs_in_psram"
 CONF_PASSWORD = "password"
 
 yoto_storage_ns = cg.esphome_ns.namespace("yoto_storage")
@@ -69,6 +70,9 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_STREAM_PORT, default=8081): cv.port,
             # Login for the admin page / file manager on `port` (both empty = no login)
             cv.Optional(CONF_USERNAME, default=""): cv.string,
+            # Let ordinary allocations of 16 KB or more use PSRAM (e.g. the JPEG
+            # decoder for cover art), keeping scarce internal RAM for the rest
+            cv.Optional(CONF_LARGE_ALLOCS_IN_PSRAM, default=False): cv.boolean,
             cv.Optional(CONF_PASSWORD, default=""): cv.string,
             # Report the file manager as the device's web UI, so Home Assistant's
             # "Visit" link opens it. The mDNS slot it needs is reserved below.
@@ -107,6 +111,15 @@ def _reserve_mdns_web_slot(config):
 FINAL_VALIDATE_SCHEMA = _reserve_mdns_web_slot
 
 
+@coroutine_with_priority(CoroPriority.LATE)
+async def _psram_malloc() -> None:
+    # Runs after the psram component, replacing its "caps alloc only" mode
+    add_idf_sdkconfig_option("CONFIG_SPIRAM_USE_CAPS_ALLOC", False)
+    add_idf_sdkconfig_option("CONFIG_SPIRAM_USE_MALLOC", True)
+    add_idf_sdkconfig_option("CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL", 16384)
+    add_idf_sdkconfig_option("CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL", 16384)
+
+
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
@@ -133,6 +146,9 @@ async def to_code(config):
     if config[CONF_ADVERTISE_WEB_UI] and "web_server" not in CORE.config:
         cg.add_define("USE_WEBSERVER")
         cg.add_define("USE_WEBSERVER_PORT", config[CONF_PORT])
+
+    if config[CONF_LARGE_ALLOCS_IN_PSRAM]:
+        CORE.add_job(_psram_malloc)
 
     # opendir/readdir/mkdir/rmdir: ESPHome disables VFS directory support unless asked
     require_vfs_dir()
