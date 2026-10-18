@@ -49,6 +49,7 @@ class YotoStorage : public PollingComponent {
   void set_frequency_khz(int f) { this->freq_khz_ = f; }
   void set_port(uint16_t p) { this->port_ = p; }
   void set_stream_port(uint16_t p) { this->stream_port_ = p; }
+  void set_auth(const std::string &user, const std::string &pass);
   void set_total_sensor(sensor::Sensor *s) { this->total_sensor_ = s; }
   void set_free_sensor(sensor::Sensor *s) { this->free_sensor_ = s; }
   void add_on_play_request_trigger(PlayRequestTrigger *t) { this->play_triggers_.push_back(t); }
@@ -101,6 +102,11 @@ class YotoStorage : public PollingComponent {
   static esp_err_t handle_mkdir_(httpd_req_t *req);
   static esp_err_t handle_clear_(httpd_req_t *req);
   static esp_err_t handle_play_(httpd_req_t *req);
+  static esp_err_t handle_settings_(httpd_req_t *req);
+  static esp_err_t handle_set_(httpd_req_t *req);
+  // Main server: HTTP Basic login (if configured). Stream server: 127.0.0.1 only.
+  // Sends the 401/403 response itself and returns false when access is denied.
+  static bool authorize_(httpd_req_t *req);
   static bool query_path_(httpd_req_t *req, std::string &rel);
   static bool uri_path_(httpd_req_t *req, const char *prefix, std::string &rel);
 
@@ -114,6 +120,7 @@ class YotoStorage : public PollingComponent {
   httpd_handle_t server_{nullptr};
 
   std::atomic<uint32_t> stream_bytes_{0};
+  std::string expected_auth_;  // "Basic <base64(user:pass)>", empty = no login
 
   sensor::Sensor *total_sensor_{nullptr};
   sensor::Sensor *free_sensor_{nullptr};

@@ -73,6 +73,14 @@ and a colour screen – with no Yoto cloud account involved.
 - **Sleep timer** (15–60 min)
 - Hold the power button for a clean power-off (saves the audiobook position first)
 
+### Web admin page (port 8080)
+- **Login** (username/password from `secrets.yaml`)
+- **Overview**: player state, volume, battery, charging, Wi-Fi, storage, sensors
+- **Settings**: every device setting (display, sound, power, Bluetooth, …) – the same ones
+  Home Assistant shows; new settings appear automatically
+- **Files**: file manager, plus an in-browser **text editor** for `.txt` files
+  (e.g. `stations.txt` via *Radio stations*)
+
 ### Built-in storage
 - eMMC mounted as FAT with long UTF-8 file names
 - **Web file manager**: browse, upload (with progress), download, delete (including whole
@@ -251,8 +259,9 @@ Open with **both knob buttons together**. Turn either knob to move, **left click
 
 ## Built-in storage
 
-- **File manager:** `http://yoto.local:8080` (or the device IP) – also Home Assistant's
-  **Visit** link on the device page. Port 8081 is used internally for audio streams.
+- **Admin page / file manager:** `http://yoto.local:8080` (or the device IP) – also Home
+  Assistant's **Visit** link on the device page. Login required. Port 8081 is used internally
+  for audio streams and only accepts connections from the Yoto itself.
 - **Folders play as playlists** in file-name order – number chapters `01 …`, `02 …`.
 - **Resume:** position saved every 30 s and on pause/stop/power-off, in a hidden `.resume`
   file per folder. Finishing a book clears it.
@@ -303,7 +312,7 @@ The file must be exactly 8 388 608 bytes. **Keep it safe** – it's your way bac
 
 ```
 yoto.yaml                     the device configuration
-secrets.yaml                  wifi_ssid, wifi_password, yoto_key
+secrets.yaml                  wifi_ssid, wifi_password, yoto_key, yoto_admin_user, yoto_admin_password
 components/
   yoto_aw88194/               + the two amp .bin files
   yoto_battery/

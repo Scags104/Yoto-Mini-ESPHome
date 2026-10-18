@@ -1,11 +1,46 @@
 #include "yoto_storage.h"
 #include "web_page.h"
 
+#include "esphome/core/application.h"
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
+#ifdef USE_NUMBER
+#include "esphome/components/number/number.h"
+#endif
+#ifdef USE_SELECT
+#include "esphome/components/select/select.h"
+#endif
+#ifdef USE_SWITCH
+#include "esphome/components/switch/switch.h"
+#endif
+#ifdef USE_LIGHT
+#include "esphome/components/light/light_state.h"
+#endif
+#ifdef USE_BUTTON
+#include "esphome/components/button/button.h"
+#endif
+#ifdef USE_SENSOR
+#include "esphome/components/sensor/sensor.h"
+#endif
+#ifdef USE_TEXT_SENSOR
+#include "esphome/components/text_sensor/text_sensor.h"
+#endif
+#ifdef USE_BINARY_SENSOR
+#include "esphome/components/binary_sensor/binary_sensor.h"
+#endif
+#ifdef USE_MEDIA_PLAYER
+#include "esphome/components/media_player/media_player.h"
+#endif
+
+#include <freertos/semphr.h>
+#include <lwip/sockets.h>
+#include <mbedtls/base64.h>
+#include <memory>
+
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <strings.h>
 #include <cerrno>
 #include <cstdio>
@@ -407,7 +442,7 @@ bool YotoStorage::start_http_() {
   cfg.lru_purge_enable = true;
   cfg.uri_match_fn = httpd_uri_match_wildcard;
   cfg.stack_size = 6144;
-  cfg.max_uri_handlers = 10;
+  cfg.max_uri_handlers = 12;
   cfg.recv_wait_timeout = 15;
   cfg.send_wait_timeout = 15;
 
@@ -423,6 +458,8 @@ bool YotoStorage::start_http_() {
       {.uri = "/api/mkdir", .method = HTTP_POST, .handler = handle_mkdir_, .user_ctx = this},
       {.uri = "/api/play", .method = HTTP_POST, .handler = handle_play_, .user_ctx = this},
       {.uri = "/api/clear", .method = HTTP_POST, .handler = handle_clear_, .user_ctx = this},
+      {.uri = "/api/settings", .method = HTTP_GET, .handler = handle_settings_, .user_ctx = this},
+      {.uri = "/api/set", .method = HTTP_POST, .handler = handle_set_, .user_ctx = this},
       {.uri = "/file/*", .method = HTTP_GET, .handler = handle_file_get_, .user_ctx = this},
       {.uri = "/file/*", .method = HTTP_HEAD, .handler = handle_file_head_, .user_ctx = this},
       {.uri = "/file/*", .method = HTTP_PUT, .handler = handle_file_put_, .user_ctx = this},
@@ -456,6 +493,69 @@ bool YotoStorage::start_http_() {
     ESP_LOGW(TAG, "Audio stream server failed to start; streaming via port %u", this->port_);
   }
   return true;
+}
+
+void YotoStorage::set_auth(const std::string &user, const std::string &pass) {
+  this->expected_auth_.clear();
+  if (user.empty() && pass.empty())
+    return;
+  const std::string plain = user + ":" + pass;
+  unsigned char out[256];
+  size_t olen = 0;
+  if (mbedtls_base64_encode(out, sizeof(out), &olen, reinterpret_cast<const unsigned char *>(plain.data()),
+                            plain.size()) == 0)
+    this->expected_auth_ = "Basic " + std::string(reinterpret_cast<char *>(out), olen);
+}
+
+static bool peer_is_loopback(httpd_req_t *req) {
+  const int fd = httpd_req_to_sockfd(req);
+  struct sockaddr_storage addr;
+  socklen_t len = sizeof(addr);
+  if (getpeername(fd, reinterpret_cast<struct sockaddr *>(&addr), &len) != 0)
+    return false;
+  if (addr.ss_family == AF_INET) {
+    const auto *in = reinterpret_cast<const struct sockaddr_in *>(&addr);
+    return (ntohl(in->sin_addr.s_addr) >> 24) == 127;
+  }
+#if LWIP_IPV6
+  if (addr.ss_family == AF_INET6) {
+    const auto *in6 = reinterpret_cast<const struct sockaddr_in6 *>(&addr);
+    const uint8_t *b = reinterpret_cast<const uint8_t *>(&in6->sin6_addr);
+    static const uint8_t LOOP6[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+    if (memcmp(b, LOOP6, 16) == 0)
+      return true;
+    // IPv4-mapped ::ffff:127.x.x.x
+    static const uint8_t MAPPED[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF};
+    return memcmp(b, MAPPED, 12) == 0 && b[12] == 127;
+  }
+#endif
+  return false;
+}
+
+bool YotoStorage::authorize_(httpd_req_t *req) {
+  auto *self = static_cast<YotoStorage *>(req->user_ctx);
+  if (req->handle == self->stream_server_) {
+    if (peer_is_loopback(req))
+      return true;
+    httpd_resp_set_status(req, "403 Forbidden");
+    httpd_resp_sendstr(req, "Forbidden");
+    return false;
+  }
+  if (self->expected_auth_.empty())
+    return true;
+  const size_t len = httpd_req_get_hdr_value_len(req, "Authorization");
+  if (len > 0 && len < 300) {
+    std::string hdr(len + 1, '\0');
+    if (httpd_req_get_hdr_value_str(req, "Authorization", &hdr[0], hdr.size()) == ESP_OK) {
+      hdr.resize(len);
+      if (hdr == self->expected_auth_)
+        return true;
+    }
+  }
+  httpd_resp_set_status(req, "401 Unauthorized");
+  httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Yoto\", charset=\"UTF-8\"");
+  httpd_resp_sendstr(req, "Login required");
+  return false;
 }
 
 bool YotoStorage::uri_path_(httpd_req_t *req, const char *prefix, std::string &rel) {
@@ -513,11 +613,15 @@ static std::string json_escape(const std::string &s) {
 }
 
 esp_err_t YotoStorage::handle_root_(httpd_req_t *req) {
+  if (!authorize_(req))
+    return ESP_OK;
   httpd_resp_set_type(req, "text/html; charset=utf-8");
   return httpd_resp_send(req, WEB_PAGE, HTTPD_RESP_USE_STRLEN);
 }
 
 esp_err_t YotoStorage::handle_list_(httpd_req_t *req) {
+  if (!authorize_(req))
+    return ESP_OK;
   auto *self = static_cast<YotoStorage *>(req->user_ctx);
   std::string rel;
   if (!query_path_(req, rel))
@@ -567,6 +671,8 @@ static bool send_all(httpd_req_t *req, const char *data, size_t len) {
 // Files are sent with a Content-Length header (not chunked), so clients such as
 // ESPHome's image downloader can size their buffers for the whole file.
 esp_err_t YotoStorage::serve_file_(httpd_req_t *req, bool send_body) {
+  if (!authorize_(req))
+    return ESP_OK;
   auto *self = static_cast<YotoStorage *>(req->user_ctx);
   std::string rel;
   if (!uri_path_(req, "/file", rel))
@@ -637,6 +743,8 @@ esp_err_t YotoStorage::serve_file_(httpd_req_t *req, bool send_body) {
 }
 
 esp_err_t YotoStorage::handle_file_put_(httpd_req_t *req) {
+  if (!authorize_(req))
+    return ESP_OK;
   auto *self = static_cast<YotoStorage *>(req->user_ctx);
   std::string rel;
   if (!uri_path_(req, "/file", rel) || rel == "/")
@@ -688,6 +796,8 @@ esp_err_t YotoStorage::handle_file_put_(httpd_req_t *req) {
 }
 
 esp_err_t YotoStorage::handle_file_delete_(httpd_req_t *req) {
+  if (!authorize_(req))
+    return ESP_OK;
   auto *self = static_cast<YotoStorage *>(req->user_ctx);
   std::string rel;
   if (!uri_path_(req, "/file", rel) || rel == "/")
@@ -719,6 +829,8 @@ esp_err_t YotoStorage::handle_file_delete_(httpd_req_t *req) {
 }
 
 esp_err_t YotoStorage::handle_mkdir_(httpd_req_t *req) {
+  if (!authorize_(req))
+    return ESP_OK;
   auto *self = static_cast<YotoStorage *>(req->user_ctx);
   std::string rel;
   if (!query_path_(req, rel) || rel == "/")
@@ -730,6 +842,8 @@ esp_err_t YotoStorage::handle_mkdir_(httpd_req_t *req) {
 }
 
 esp_err_t YotoStorage::handle_clear_(httpd_req_t *req) {
+  if (!authorize_(req))
+    return ESP_OK;
   auto *self = static_cast<YotoStorage *>(req->user_ctx);
   std::string rel;
   if (!query_path_(req, rel) || !self->is_dir(rel))
@@ -743,6 +857,8 @@ esp_err_t YotoStorage::handle_clear_(httpd_req_t *req) {
 }
 
 esp_err_t YotoStorage::handle_play_(httpd_req_t *req) {
+  if (!authorize_(req))
+    return ESP_OK;
   auto *self = static_cast<YotoStorage *>(req->user_ctx);
   std::string rel;
   if (!query_path_(req, rel))
@@ -752,6 +868,265 @@ esp_err_t YotoStorage::handle_play_(httpd_req_t *req) {
   if (full.empty() || stat(full.c_str(), &st) != 0)
     return send_error(req, "404 Not Found", "not found");
   self->request_play(rel);
+  httpd_resp_set_type(req, "application/json");
+  return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+// ---------------------------------------------------------------------------
+// Admin API: settings/status snapshot and changes. Entity states are read and
+// changed on the main loop (via defer), never from the web server task.
+// ---------------------------------------------------------------------------
+static void json_num(std::string &o, float v, int decimals) {
+  char b[32];
+  if (std::isnan(v)) {
+    o += "null";
+    return;
+  }
+  snprintf(b, sizeof(b), "%.*f", decimals, v);
+  o += b;
+}
+
+static std::string build_admin_json() {
+  std::string o = "{\"device\":\"" + json_escape(App.get_friendly_name().str()) + "\",\"settings\":[";
+  bool first = true;
+  auto sep = [&]() {
+    if (!first)
+      o += ",";
+    first = false;
+  };
+#ifdef USE_NUMBER
+  for (auto *n : App.get_numbers()) {
+    if (n->is_internal())
+      continue;
+    sep();
+    o += "{\"t\":\"number\",\"n\":\"" + json_escape(n->get_name().str()) + "\",\"v\":";
+    json_num(o, n->state, 2);
+    o += ",\"min\":";
+    json_num(o, n->traits.get_min_value(), 2);
+    o += ",\"max\":";
+    json_num(o, n->traits.get_max_value(), 2);
+    o += ",\"step\":";
+    json_num(o, n->traits.get_step(), 2);
+    o += ",\"u\":\"" + json_escape(n->get_unit_of_measurement_ref().str()) + "\"}";
+  }
+#endif
+#ifdef USE_SELECT
+  for (auto *sel : App.get_selects()) {
+    if (sel->is_internal())
+      continue;
+    sep();
+    o += "{\"t\":\"select\",\"n\":\"" + json_escape(sel->get_name().str()) + "\",\"v\":\"" +
+         json_escape(sel->current_option().str()) + "\",\"o\":[";
+    bool f2 = true;
+    for (const char *opt : sel->traits.get_options()) {
+      o += f2 ? "\"" : ",\"";
+      f2 = false;
+      o += json_escape(opt);
+      o += "\"";
+    }
+    o += "]}";
+  }
+#endif
+#ifdef USE_SWITCH
+  for (auto *sw : App.get_switches()) {
+    if (sw->is_internal())
+      continue;
+    sep();
+    o += "{\"t\":\"switch\",\"n\":\"" + json_escape(sw->get_name().str()) + "\",\"v\":" +
+         (sw->state ? "true" : "false") + "}";
+  }
+#endif
+#ifdef USE_LIGHT
+  for (auto *l : App.get_lights()) {
+    if (l->is_internal())
+      continue;
+    sep();
+    o += "{\"t\":\"light\",\"n\":\"" + json_escape(l->get_name().str()) + "\",\"on\":" +
+         (l->remote_values.is_on() ? "true" : "false") + ",\"v\":";
+    json_num(o, l->remote_values.get_brightness() * 100.0f, 0);
+    o += "}";
+  }
+#endif
+#ifdef USE_MEDIA_PLAYER
+  for (auto *mp : App.get_media_players()) {
+    if (mp->is_internal())
+      continue;
+    sep();
+    o += "{\"t\":\"volume\",\"n\":\"Volume\",\"v\":";
+    json_num(o, mp->volume * 100.0f, 0);
+    o += ",\"state\":\"";
+    o += media_player::media_player_state_to_string(mp->state);
+    o += "\"}";
+    break;
+  }
+#endif
+#ifdef USE_BUTTON
+  for (auto *b : App.get_buttons()) {
+    if (b->is_internal())
+      continue;
+    sep();
+    o += "{\"t\":\"button\",\"n\":\"" + json_escape(b->get_name().str()) + "\"}";
+  }
+#endif
+  o += "],\"status\":[";
+  first = true;
+#ifdef USE_SENSOR
+  for (auto *sn : App.get_sensors()) {
+    if (sn->is_internal() || !sn->has_state())
+      continue;
+    sep();
+    o += "{\"n\":\"" + json_escape(sn->get_name().str()) + "\",\"v\":\"";
+    char b[32];
+    snprintf(b, sizeof(b), "%.*f", std::max<int>(0, sn->get_accuracy_decimals()), sn->state);
+    o += b;
+    o += "\",\"u\":\"" + json_escape(sn->get_unit_of_measurement_ref().str()) + "\"}";
+  }
+#endif
+#ifdef USE_TEXT_SENSOR
+  for (auto *ts : App.get_text_sensors()) {
+    if (ts->is_internal() || !ts->has_state())
+      continue;
+    sep();
+    o += "{\"n\":\"" + json_escape(ts->get_name().str()) + "\",\"v\":\"" + json_escape(ts->get_state()) +
+         "\",\"u\":\"\"}";
+  }
+#endif
+#ifdef USE_BINARY_SENSOR
+  for (auto *bs : App.get_binary_sensors()) {
+    if (bs->is_internal() || !bs->has_state())
+      continue;
+    sep();
+    o += "{\"n\":\"" + json_escape(bs->get_name().str()) + "\",\"v\":\"" + (bs->state ? "On" : "Off") +
+         "\",\"u\":\"\"}";
+  }
+#endif
+  o += "]}";
+  return o;
+}
+
+namespace {
+struct SnapshotJob {
+  std::string json;
+  SemaphoreHandle_t done{xSemaphoreCreateBinary()};
+  ~SnapshotJob() {
+    if (done != nullptr)
+      vSemaphoreDelete(done);
+  }
+};
+}  // namespace
+
+esp_err_t YotoStorage::handle_settings_(httpd_req_t *req) {
+  if (!authorize_(req))
+    return ESP_OK;
+  auto *self = static_cast<YotoStorage *>(req->user_ctx);
+  auto job = std::make_shared<SnapshotJob>();
+  if (job->done == nullptr)
+    return send_error(req, "500 Internal Server Error", "out of memory");
+  self->defer([job]() {
+    job->json = build_admin_json();
+    xSemaphoreGive(job->done);
+  });
+  if (xSemaphoreTake(job->done, pdMS_TO_TICKS(3000)) != pdTRUE)
+    return send_error(req, "503 Service Unavailable", "device busy");
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  return httpd_resp_send(req, job->json.c_str(), job->json.size());
+}
+
+static void apply_setting(const std::string &type, const std::string &name, const std::string &value) {
+  const float fv = strtof(value.c_str(), nullptr);
+#ifdef USE_NUMBER
+  if (type == "number") {
+    for (auto *n : App.get_numbers())
+      if (!n->is_internal() && n->get_name() == name) {
+        auto c = n->make_call();
+        c.set_value(fv);
+        c.perform();
+        return;
+      }
+  }
+#endif
+#ifdef USE_SELECT
+  if (type == "select") {
+    for (auto *sel : App.get_selects())
+      if (!sel->is_internal() && sel->get_name() == name) {
+        auto c = sel->make_call();
+        c.set_option(value);
+        c.perform();
+        return;
+      }
+  }
+#endif
+#ifdef USE_SWITCH
+  if (type == "switch") {
+    for (auto *sw : App.get_switches())
+      if (!sw->is_internal() && sw->get_name() == name) {
+        if (value == "1" || value == "true")
+          sw->turn_on();
+        else
+          sw->turn_off();
+        return;
+      }
+  }
+#endif
+#ifdef USE_LIGHT
+  if (type == "light") {
+    for (auto *l : App.get_lights())
+      if (!l->is_internal() && l->get_name() == name) {
+        if (value == "off") {
+          l->turn_off().perform();
+        } else {
+          auto c = l->turn_on();
+          if (value != "on")
+            c.set_brightness(std::max(0.01f, std::min(1.0f, fv / 100.0f)));
+          c.perform();
+        }
+        return;
+      }
+  }
+#endif
+#ifdef USE_MEDIA_PLAYER
+  if (type == "volume") {
+    for (auto *mp : App.get_media_players())
+      if (!mp->is_internal()) {
+        mp->make_call().set_volume(std::max(0.0f, std::min(1.0f, fv / 100.0f))).perform();
+        return;
+      }
+  }
+#endif
+#ifdef USE_BUTTON
+  if (type == "button") {
+    for (auto *b : App.get_buttons())
+      if (!b->is_internal() && b->get_name() == name) {
+        b->press();
+        return;
+      }
+  }
+#endif
+  ESP_LOGW(TAG, "Admin: unknown setting %s '%s'", type.c_str(), name.c_str());
+}
+
+esp_err_t YotoStorage::handle_set_(httpd_req_t *req) {
+  if (!authorize_(req))
+    return ESP_OK;
+  auto *self = static_cast<YotoStorage *>(req->user_ctx);
+  const size_t qlen = httpd_req_get_url_query_len(req);
+  if (qlen == 0 || qlen > 512)
+    return send_error(req, "400 Bad Request", "missing parameters");
+  std::string q(qlen + 1, '\0');
+  httpd_req_get_url_query_str(req, &q[0], q.size());
+  auto param = [&](const char *key) {
+    std::string v(256, '\0');
+    if (httpd_query_key_value(q.c_str(), key, &v[0], v.size()) != ESP_OK)
+      return std::string();
+    v.resize(strlen(v.c_str()));
+    return url_decode(v);
+  };
+  const std::string type = param("t"), name = param("n"), value = param("v");
+  if (type.empty())
+    return send_error(req, "400 Bad Request", "missing type");
+  ESP_LOGI(TAG, "Admin: %s '%s' -> %s", type.c_str(), name.c_str(), value.c_str());
+  self->defer([type, name, value]() { apply_setting(type, name, value); });
   httpd_resp_set_type(req, "application/json");
   return httpd_resp_sendstr(req, "{\"ok\":true}");
 }

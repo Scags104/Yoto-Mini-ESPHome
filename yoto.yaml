@@ -1615,6 +1615,8 @@ yoto_storage:
   data2_pin: GPIO12
   data3_pin: GPIO13
   port: 8080
+  username: !secret yoto_admin_user
+  password: !secret yoto_admin_password
   advertise_web_ui: true
   update_interval: 5min
   total_space:

@@ -34,6 +34,8 @@ CONF_ON_PLAY_REQUEST = "on_play_request"
 CONF_FREQUENCY_KHZ = "frequency_khz"
 CONF_ADVERTISE_WEB_UI = "advertise_web_ui"
 CONF_STREAM_PORT = "stream_port"
+CONF_USERNAME = "username"
+CONF_PASSWORD = "password"
 
 yoto_storage_ns = cg.esphome_ns.namespace("yoto_storage")
 YotoStorage = yoto_storage_ns.class_("YotoStorage", cg.PollingComponent)
@@ -65,6 +67,9 @@ CONFIG_SCHEMA = cv.All(
             # Separate server for audio streaming to the player, so a long
             # stream never blocks the web page, uploads or cover art
             cv.Optional(CONF_STREAM_PORT, default=8081): cv.port,
+            # Login for the admin page / file manager on `port` (both empty = no login)
+            cv.Optional(CONF_USERNAME, default=""): cv.string,
+            cv.Optional(CONF_PASSWORD, default=""): cv.string,
             # Report the file manager as the device's web UI, so Home Assistant's
             # "Visit" link opens it. The mDNS slot it needs is reserved below.
             cv.Optional(CONF_ADVERTISE_WEB_UI, default=False): cv.boolean,
@@ -113,6 +118,7 @@ async def to_code(config):
     cg.add(var.set_frequency_khz(config[CONF_FREQUENCY_KHZ]))
     cg.add(var.set_port(config[CONF_PORT]))
     cg.add(var.set_stream_port(config[CONF_STREAM_PORT]))
+    cg.add(var.set_auth(config[CONF_USERNAME], config[CONF_PASSWORD]))
 
     if conf := config.get(CONF_TOTAL_SPACE):
         cg.add(var.set_total_sensor(await sensor.new_sensor(conf)))
