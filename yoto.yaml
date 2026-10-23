@@ -1,6 +1,7 @@
 esphome:
   name: yoto
   friendly_name: yoto
+  min_version: 2026.10.0
   on_boot:
     priority: -100
     then:
@@ -87,6 +88,7 @@ esp32:
 psram:
   mode: quad
   speed: 80MHz
+  ignore_not_found: false
 
 logger:
   level: DEBUG

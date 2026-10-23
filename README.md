@@ -280,7 +280,8 @@ Open with **both knob buttons together**. Turn either knob to move, **left click
 
 - A Yoto Mini (board config #04), opened to the main board
 - A **3.3 V** USB-to-serial adapter, fine wire / pogo pin, soldering iron, multimeter
-- ESPHome **2026.9** or newer, and `esptool` v5 (`pipx install esptool`)
+- ESPHome **2026.10.0** or newer (enforced by `min_version`), and `esptool` v5 (`pipx install esptool`)
+- Music Assistant **2.10.7** or newer (Sendspin encryption, required by ESPHome 2026.10)
 - The two stock amp DSP files from Open Yoto (`firmware/components/aw88194/`):
   `factory_aw88194_fw.bin` (2036 bytes) and `factory_aw88194_cfg_rev04.bin` (924 bytes)
 
