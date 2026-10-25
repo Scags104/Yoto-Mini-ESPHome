@@ -59,6 +59,7 @@ class Menu {
   std::function<bool(std::vector<Station> &)> list_stations;
   std::function<void(const std::string &, const std::string &)> play_radio;
   std::function<void()> stop_playback;
+  std::function<void()> start_toothbrush;
   std::function<float()> screen_timeout;
   std::function<void(float)> set_screen_timeout;
   std::function<float()> auto_off;
@@ -337,6 +338,11 @@ class Menu {
         v.push_back({"Bluetooth", ">", [this] { this->enter_(Page::BLUETOOTH); }});
         v.push_back({"Storage", ">", [this] { this->enter_(Page::STORAGE, "/"); }});
         v.push_back({"Radio", ">", [this] { this->enter_(Page::RADIO); }});
+        v.push_back({"Toothbrush timer", "", [this] {
+                       if (this->start_toothbrush)
+                         this->start_toothbrush();
+                       this->close();
+                     }});
         std::string sleep = "Off";
         if (const uint32_t s = this->sleep_remaining_s()) {
           char buf[16];

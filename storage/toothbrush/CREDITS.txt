@@ -1,0 +1,11 @@
+Toothbrush timer sounds for the Yoto Mini ESPHome firmware
+
+Voice cues (tb_*.mp3 except tb_music.mp3)
+  Synthesised with Piper (https://github.com/rhasspy/piper), voice "en-us libritts high",
+  speaker 46. The voice model is trained on the LibriTTS dataset (http://www.openslr.org/60/),
+  licensed CC BY 4.0.
+
+Background music (tb_music.mp3)
+  Original composition generated for this project (2 min 20 s, 112 bpm).
+
+Replace any file with your own recording of the same name (MP3, 44.1 kHz recommended).

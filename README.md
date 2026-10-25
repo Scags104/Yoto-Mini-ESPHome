@@ -71,6 +71,8 @@ and a colour screen – with no Yoto cloud account involved.
 - **Auto power-off** after inactivity on battery
 - **Low-battery** chime at 7 %, automatic power-off at 3 %
 - **Sleep timer** (15–60 min)
+- **Toothbrush timer**: 4 × 30 s teeth quarters + 15 s tongue, spoken cues, background music,
+  countdown screen; from the menu or a Home Assistant button (`esphome.yoto_toothbrush` event)
 - Hold the power button for a clean power-off (saves the audiobook position first)
 
 ### Web admin page (port 8080)
@@ -193,6 +195,7 @@ Open with **both knob buttons together**. Turn either knob to move, **left click
 - **Bluetooth** – on/off, pair new device, Bluetooth when away
 - **Storage** – browse folders; *Resume* / *Play from start* / *Play this folder*; play a file
 - **Radio** – internet radio stations from `stations.txt`
+- **Toothbrush timer** – start the 2 min 15 s brushing timer
 - **Sleep timer** – Off, 15, 30, 45, 60 min
 - **Settings** – screen timeout, auto power-off, brightness, theme, clock style, night mode
 - **Info** – IP address, Wi-Fi signal, battery, charging, storage free, uptime, ESPHome version
@@ -268,6 +271,9 @@ Open with **both knob buttons together**. Turn either knob to move, **left click
 - **Limits:** listings show the first 300 items; folder playlists take up to 500 tracks.
   Huge folders (e.g. the stock Yoto icon cache) can be removed with *Delete* / *Delete all here*.
 - Hidden files (starting with `.`) are not listed.
+- **Toothbrush timer sounds:** the spoken cues are built into the firmware from
+  `sounds/toothbrush/`; the background music goes on the storage as `/toothbrush/tb_music.mp3`
+  (in `storage/toothbrush/` in this bundle).
 - **Radio stations:** upload `stations.txt` to the top level of the storage – one station per
   line as `Genre | Name | stream URL` (genres become submenus) or `Name | stream URL`
   (a starter file is in `storage/stations.txt` in this bundle).
@@ -322,6 +328,7 @@ components/
   yoto_menu/
   yoto_storage/
 sounds/                       chime WAV files
+images/                       toothbrush timer mouth pictures (tb_mouth_0..4.png)
 ```
 
 `yoto_key` is a 32-byte base64 key: `openssl rand -base64 32`.

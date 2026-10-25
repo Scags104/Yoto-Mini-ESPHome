@@ -61,6 +61,7 @@ class YotoStorage : public PollingComponent {
   static bool sanitize(const std::string &rel, std::string &out);
   std::string full_path(const std::string &rel) const;  // "" if invalid
   bool is_dir(const std::string &rel) const;
+  bool file_exists(const std::string &rel) const;
   // Lists at most max_entries items (folders like the stock Yoto "icons" cache
   // hold thousands of files; listing them all would exhaust the RAM).
   // *truncated is set when there were more.

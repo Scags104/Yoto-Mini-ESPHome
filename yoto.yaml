@@ -19,6 +19,7 @@ esphome:
             return id(storage).list_dir(p, out);
           };
           m.has_resume = [](const std::string &p) { return id(storage_source).has_resume(p); };
+          m.start_toothbrush = []() { id(toothbrush_start).execute(); };
           m.list_stations = [](std::vector<yoto_storage::Station> &out) {
             return id(storage).load_stations(out);
           };
@@ -329,6 +330,18 @@ audio_file:
     file: { type: local, path: sounds/bt_pairing.wav }
   - id: snd_bt_connected
     file: { type: local, path: sounds/bt_connected.wav }
+  - id: tb_start
+    file: { type: local, path: sounds/toothbrush/tb_start.mp3 }
+  - id: tb_top_right
+    file: { type: local, path: sounds/toothbrush/tb_top_right.mp3 }
+  - id: tb_bottom_left
+    file: { type: local, path: sounds/toothbrush/tb_bottom_left.mp3 }
+  - id: tb_bottom_right
+    file: { type: local, path: sounds/toothbrush/tb_bottom_right.mp3 }
+  - id: tb_tongue
+    file: { type: local, path: sounds/toothbrush/tb_tongue.mp3 }
+  - id: tb_done
+    file: { type: local, path: sounds/toothbrush/tb_done.mp3 }
 
 yoto_aw88194:
   id: spk_amp
@@ -529,7 +542,6 @@ binary_sensor:
       - timing:
           - ON for at least 2s
         then:
-          # Ignore the hold that switched the Yoto on (button not yet released since boot)
           - if:
               condition:
                 lambda: 'return id(power_btn_armed);'
@@ -620,7 +632,6 @@ script:
           id: media_spk
           decibel_reduction: 0
           duration: 500ms
-
   - id: amp_follow_playback
     mode: restart
     then:
@@ -640,35 +651,41 @@ script:
     then:
       - if:
           condition:
-            binary_sensor.is_on: bt_connected
+            lambda: 'return id(tb_active);'
           then:
-            - a2dp_avrcp.play_pause: avrcp_ctrl
+            - logger.log: "Toothbrush timer running: click ignored (hold the left knob to stop)"
           else:
             - if:
                 condition:
-                  lambda: |-
-                    const auto sst = id(storage_source).get_state();
-                    return sst == media_source::MediaSourceState::PLAYING ||
-                           sst == media_source::MediaSourceState::PAUSED;
+                  binary_sensor.is_on: bt_connected
                 then:
-                  - media_player.toggle: yoto_player
+                  - a2dp_avrcp.play_pause: avrcp_ctrl
                 else:
                   - if:
                       condition:
-                        lambda: 'return id(last_src) == 2 && !id(storage_source).last_uri().empty();'
+                        lambda: |-
+                          const auto sst = id(storage_source).get_state();
+                          return sst == media_source::MediaSourceState::PLAYING ||
+                                 sst == media_source::MediaSourceState::PAUSED;
                       then:
-                        - media_player.play_media:
-                            id: yoto_player
-                            media_url: !lambda 'return id(storage_source).last_uri();'
+                        - media_player.toggle: yoto_player
                       else:
-                        - lambda: |-
-                            if (id(yoto_player).state == media_player::MEDIA_PLAYER_STATE_PLAYING) {
-                              ESP_LOGI("yoto", "Pausing Music Assistant");
-                              id(sendspin_hub)->send_client_command(::sendspin::SendspinControllerCommand::PAUSE);
-                            } else {
-                              ESP_LOGI("yoto", "Resuming Music Assistant");
-                              id(sendspin_hub)->send_client_command(::sendspin::SendspinControllerCommand::PLAY);
-                            }
+                        - if:
+                            condition:
+                              lambda: 'return id(last_src) == 2 && !id(storage_source).last_uri().empty();'
+                            then:
+                              - media_player.play_media:
+                                  id: yoto_player
+                                  media_url: !lambda 'return id(storage_source).last_uri();'
+                            else:
+                              - lambda: |-
+                                  if (id(yoto_player).state == media_player::MEDIA_PLAYER_STATE_PLAYING) {
+                                    ESP_LOGI("yoto", "Pausing Music Assistant");
+                                    id(sendspin_hub)->send_client_command(::sendspin::SendspinControllerCommand::PAUSE);
+                                  } else {
+                                    ESP_LOGI("yoto", "Resuming Music Assistant");
+                                    id(sendspin_hub)->send_client_command(::sendspin::SendspinControllerCommand::PLAY);
+                                  }
   - id: chime
     mode: queued
     parameters:
@@ -684,10 +701,102 @@ script:
       - script.execute: { id: chime, sound: snd_silence }
       - delay: 1500ms
       - script.execute: { id: chime, sound: snd_startup }
+  - id: toothbrush_start
+    mode: single
+    then:
+      - logger.log: "Toothbrush timer: start"
+      - script.execute: wake_screen
+      - lambda: |-
+          id(tb_active) = true;
+          id(tb_start_ms) = millis();
+          id(tb_zone) = -1;
+          id(tb_done_until) = 0;
+          id(overlay_type) = 0;
+          id(screen_dirty) = true;
+      - script.execute: { id: chime, sound: tb_start }
+      - delay: 500ms
+      - wait_until:
+          condition:
+            lambda: 'return id(yoto_player).state != media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
+          timeout: 15s
+      - delay: 200ms
+      - if:
+          condition:
+            lambda: 'return id(tb_active) && id(storage).file_exists("/toothbrush/tb_music.mp3");'
+          then:
+            - mixer_speaker.apply_ducking:
+                id: media_spk
+                decibel_reduction: 51
+                duration: 0ms
+            - media_player.play_media:
+                id: yoto_player
+                media_url: !lambda 'return std::string("storage:///toothbrush/tb_music.mp3");'
+            - delay: 2500ms
+            - mixer_speaker.apply_ducking:
+                id: media_spk
+                decibel_reduction: 0
+                duration: 1500ms
+  - id: toothbrush_cue
+    mode: queued
+    parameters:
+      name: string
+    then:
+      - if:
+          condition:
+            lambda: 'return id(storage_source).get_state() == media_source::MediaSourceState::PLAYING;'
+          then:
+            - media_player.pause: yoto_player
+            - delay: 150ms
+            - script.execute: { id: chime, sound: !lambda 'return name;' }
+            - delay: 500ms
+            - wait_until:
+                condition:
+                  lambda: 'return id(yoto_player).state != media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
+                timeout: 15s
+            - delay: 300ms
+            - if:
+                condition:
+                  lambda: 'return id(tb_active);'
+                then:
+                  - media_player.play: yoto_player
+          else:
+            - script.execute: { id: chime, sound: !lambda 'return name;' }
+  - id: toothbrush_finish
+    mode: single
+    parameters:
+      completed: bool
+    then:
+      - lambda: |-
+          id(tb_active) = false;
+          id(tb_done_until) = completed ? millis() + 8000 : 0;
+          id(screen_dirty) = true;
+      - mixer_speaker.apply_ducking:
+          id: media_spk
+          decibel_reduction: 0
+          duration: 0ms
+      - logger.log:
+          format: "Toothbrush timer: %s"
+          args: ['completed ? "completed" : "stopped early"']
+      - homeassistant.event:
+          event: esphome.yoto_toothbrush
+          data:
+            result: !lambda 'return completed ? "completed" : "stopped";'
+      - if:
+          condition:
+            lambda: 'return completed;'
+          then:
+            - media_player.stop: yoto_player
+            - delay: 300ms
+            - script.execute: { id: toothbrush_cue, name: "tb_done" }
   - id: full_stop
     mode: single
     then:
       - logger.log: "Left knob held: full stop"
+      - if:
+          condition:
+            lambda: 'return id(tb_active);'
+          then:
+            - script.execute: { id: toothbrush_finish, completed: false }
       - if:
           condition:
             binary_sensor.is_on: bt_connected
@@ -837,7 +946,19 @@ globals:
   - id: splash_done
     type: bool
     initial_value: 'false'
-  - id: power_btn_armed            # power button released at least once since boot
+  - id: tb_active
+    type: bool
+    initial_value: 'false'
+  - id: tb_start_ms
+    type: uint32_t
+    initial_value: '0'
+  - id: tb_zone
+    type: int
+    initial_value: '-1'
+  - id: tb_done_until
+    type: uint32_t
+    initial_value: '0'
+  - id: power_btn_armed
     type: bool
     initial_value: 'false'
   - id: night_active
@@ -980,6 +1101,48 @@ number:
     entity_category: config
 
 interval:
+  - interval: 250ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(tb_active);'
+          then:
+            - lambda: |-
+                static const uint32_t ENDS[5] = {30000, 60000, 90000, 120000, 135000};
+                const uint32_t el = millis() - id(tb_start_ms);
+                int zone = 5;
+                for (int i = 0; i < 5; i++)
+                  if (el < ENDS[i]) { zone = i; break; }
+                if (zone != id(tb_zone)) {
+                  id(tb_zone) = zone;
+                  id(screen_dirty) = true;
+                }
+                static uint32_t last_sec = UINT32_MAX;
+                if (el / 1000 != last_sec) {
+                  last_sec = el / 1000;
+                  id(screen_dirty) = true;
+                }
+            - if:
+                condition:
+                  lambda: 'return id(tb_zone) >= 5;'
+                then:
+                  - script.execute: { id: toothbrush_finish, completed: true }
+                else:
+                  - if:
+                      condition:
+                        lambda: |-
+                          static int announced = -2;
+                          if (id(tb_zone) == 0) announced = 0;
+                          if (id(tb_zone) == announced) return false;
+                          announced = id(tb_zone);
+                          return true;
+                      then:
+                        - script.execute:
+                            id: toothbrush_cue
+                            name: !lambda |-
+                              static const char *const CUES[5] = {"tb_start", "tb_top_right", "tb_bottom_left",
+                                                                  "tb_bottom_right", "tb_tongue"};
+                              return std::string(CUES[id(tb_zone)]);
   - interval: 30s
     then:
       - lambda: |-
@@ -1329,6 +1492,28 @@ display:
         it.filled_rectangle(hx - r - 1, hy, 4, 8, WHITE);
         it.filled_rectangle(hx + r - 2, hy, 4, 8, WHITE);
       }
+      if (id(tb_active) || millis() < id(tb_done_until)) {
+        if (!id(tb_active)) {
+          it.filled_circle(120, 112, 46, GREEN);
+          for (int d = -2; d <= 2; d++) {
+            it.line(98, 114 + d, 114, 130 + d, BLACK);
+            it.line(114, 130 + d, 144, 96 + d, BLACK);
+          }
+          it.print(120, 190, id(font_medium), WHITE, TextAlign::CENTER, "Great job!");
+          it.print(120, 218, id(font_small), GREY, TextAlign::CENTER, "Sparkly clean teeth");
+          return;
+        }
+        const uint32_t el = millis() - id(tb_start_ms);
+        const int left = el >= 135000 ? 0 : (int) ((135000 - el + 999) / 1000);
+        it.printf(120, 54, id(font_large), WHITE, TextAlign::CENTER, "%d:%02d", left / 60, left % 60);
+        static const char *const ZONES[5] = {"Top left", "Top right", "Bottom left", "Bottom right", "Tongue"};
+        const int zone = id(tb_zone) < 0 ? 0 : (id(tb_zone) > 4 ? 4 : id(tb_zone));
+        it.print(120, 88, id(font_small), BLUE, TextAlign::CENTER, ZONES[zone]);
+        static display::BaseImage *const MOUTH[5] = {id(tb_mouth_0), id(tb_mouth_1), id(tb_mouth_2),
+                                                     id(tb_mouth_3), id(tb_mouth_4)};
+        it.image(40, 104, MOUTH[zone]);
+        return;
+      }
       if (yoto_menu::menu.is_open()) {
         yoto_menu::menu.set_palette(WHITE, GREY, HL, DIM);
         yoto_menu::menu.draw(it, id(font_medium), id(font_small));
@@ -1591,6 +1776,16 @@ image:
           level: WARN
           format: "Storage cover art failed to load"
       - lambda: 'id(has_storage_cover) = false;'
+  - platform: file
+    defaults:
+      type: RGB565
+      transparency: alpha_channel
+    files:
+      - { id: tb_mouth_0, file: images/tb_mouth_0.png }
+      - { id: tb_mouth_1, file: images/tb_mouth_1.png }
+      - { id: tb_mouth_2, file: images/tb_mouth_2.png }
+      - { id: tb_mouth_3, file: images/tb_mouth_3.png }
+      - { id: tb_mouth_4, file: images/tb_mouth_4.png }
   - platform: sendspin
     format: JPEG
     type: RGB565
@@ -1641,6 +1836,11 @@ yoto_storage:
 button:
   - platform: restart
     name: "Restart"
+  - platform: template
+    name: "Toothbrush timer"
+    icon: mdi:toothbrush
+    on_press:
+      - script.execute: toothbrush_start
 
 debug:
   update_interval: 30s

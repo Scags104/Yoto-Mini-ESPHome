@@ -103,6 +103,12 @@ bool YotoStorage::is_dir(const std::string &rel) const {
   return !full.empty() && stat(full.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+bool YotoStorage::file_exists(const std::string &rel) const {
+  const std::string full = this->full_path(rel);
+  struct stat st;
+  return !full.empty() && stat(full.c_str(), &st) == 0 && !S_ISDIR(st.st_mode);
+}
+
 bool YotoStorage::is_audio_file(const std::string &name) {
   const size_t dot = name.rfind('.');
   if (dot == std::string::npos)
@@ -442,6 +448,9 @@ bool YotoStorage::start_http_() {
   cfg.lru_purge_enable = true;
   cfg.uri_match_fn = httpd_uri_match_wildcard;
   cfg.stack_size = 6144;
+#ifdef CONFIG_SPIRAM
+  cfg.task_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;  // keep scarce internal RAM free
+#endif
   cfg.max_uri_handlers = 12;
   cfg.recv_wait_timeout = 15;
   cfg.send_wait_timeout = 15;
@@ -477,6 +486,9 @@ bool YotoStorage::start_http_() {
   scfg.lru_purge_enable = true;
   scfg.uri_match_fn = httpd_uri_match_wildcard;
   scfg.stack_size = 6144;
+#ifdef CONFIG_SPIRAM
+  scfg.task_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+#endif
   scfg.max_uri_handlers = 2;
   scfg.recv_wait_timeout = 15;
   scfg.send_wait_timeout = 15;
@@ -542,6 +554,9 @@ bool YotoStorage::authorize_(httpd_req_t *req) {
     return false;
   }
   if (self->expected_auth_.empty())
+    return true;
+  // The Yoto's own requests (e.g. cover art fetched over 127.0.0.1) don't need a login
+  if (peer_is_loopback(req))
     return true;
   const size_t len = httpd_req_get_hdr_value_len(req, "Authorization");
   if (len > 0 && len < 300) {
